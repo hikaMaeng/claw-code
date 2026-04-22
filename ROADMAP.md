@@ -8102,3 +8102,112 @@ After:  claw resume bogus-id → [error-kind: unknown]: "`claw resume` is a slas
 
 ---
 
+
+---
+
+## Worked Example: Cycle #61–#63 Doctrine Loop (Canonical)
+
+**Validated by gaebal-gajae, 2026-04-23 03:17 Seoul.** This three-cycle sequence is preserved as the reference implementation of the doctrine-loop pattern.
+
+### Stage 1: Violation (Cycle #61)
+
+**Trigger:** Dogfood probe found `claw resume bogus-id` emits `missing_credentials`.
+
+**Attempted action:** Implement naive broad fix — intercept any slash-command-named verb with args.
+
+**Result:** 3 test regressions. The fix over-caught `claw explain this pattern` (a legitimate prompt).
+
+**Recovery:** Clean revert. 181 tests pass on main. No hidden state.
+
+**Key move:** Did NOT force the broken fix. Did NOT declare closure on false grounds. Filed investigation update instead.
+
+### Stage 2: Reframe (Cycle #62)
+
+**Named the ambiguity:** Some slash-command verbs are "reserved" (positional args have specific meaning: `resume SESSION_ID`). Others are "promptable" (positional args can be prompt text: `explain this pattern`).
+
+**Integration-bandwidth doctrine emerged:** When queue has 12+ branches, new branches compound reviewer cognition cost. Action shift: from "spawn branches" to "prep existing branches for review."
+
+**Key move:** No code. No branches. Pure framing work. Zero regression risk.
+
+### Stage 3: Closure (Cycle #63)
+
+**Applied the reframe:** Reserved vs. promptable verbs is a classification problem. Added `is_reserved_semantic_verb()` helper with explicit set: `resume, compact, memory, commit, pr, issue, bughunter`.
+
+**Result:** 23-line fix. 181 tests pass. Zero regressions. Backward compatibility verified (`explain this` still parses as Prompt).
+
+**Key move:** Targeted interception only when BOTH conditions hold: reserved verb AND positional args. Promptable verbs continue their existing path.
+
+### Why This Loop Worked
+
+**Cycle boundary discipline:**
+- #61 stopped when fix broke tests (didn't force through)
+- #62 named the problem without implementing (pure framing)
+- #63 implemented only after classification was clear
+
+**Evidence-based progression:**
+- #61 produced 3-test regression as concrete evidence
+- #62 framed "reserved vs. promptable" as the actual constraint
+- #63 verified fix + tested backward compatibility
+
+**Documentation at every stage:**
+- #61 investigation update in ROADMAP
+- #62 integration-bandwidth principle
+- #63 worked example (this)
+
+### What Would Have Gone Wrong Without The Loop
+
+**Scenario A: Force broken fix from #61.**
+- Tests fail in CI
+- Reviewer rejects or asks questions
+- Rebase/rework needed
+- Net cost: 2-3 cycles of thrash + reputation cost
+
+**Scenario B: Drop #61 investigation, find bug again later.**
+- Backlog rot
+- Another dogfood finds same bug
+- Repeat analysis
+- Net cost: cycle #63 + duplicate investigation
+
+**Scenario C: Implement #63 blindly without cycle #62 reframe.**
+- Probably choose wrong verbs for reserved list
+- Test regressions on promptable verbs
+- Back to scenario A
+
+The loop structure **prevents all three failure modes** by:
+1. Making test regressions honest (cycle #61 → stop)
+2. Making the reframe explicit (cycle #62 → name it)
+3. Making the fix evidence-backed (cycle #63 → classification from reframe)
+
+### Transferable Pattern
+
+Any future claw facing:
+1. "Found a bug, naive fix fails" → treat as cycle #61 (investigation)
+2. "Know the problem but not the exact fix" → treat as cycle #62 (reframe)
+3. "Have explicit classification/protocol" → treat as cycle #63 (closure)
+
+Do not skip stages. Do not compress into one cycle if the work doesn't support it.
+
+### Bounded Patch Principle
+
+Cycle #63 is the final evidence for: **bounded patches close loops cleanly.**
+
+- 23-line diff (targeted)
+- One new helper function (scoped)
+- One pre-check (localized)
+- No structural changes to existing paths
+- Backward-compatible by construction
+
+When a fix requires 500+ lines or touches 10+ files, it usually means the classification wasn't yet made explicit. Return to cycle #62 (reframe) and split the problem.
+
+### Explicit Deliverables from The Loop
+
+- **ROADMAP #160** filed → investigation-updated → shipped → closed
+- **4 operational principles** formalized (diagnostic-strictness, cycle-cadence, backlog-truthfulness, integration-bandwidth)
+- **1 meta-pattern** documented (doctrine-loop pattern)
+- **1 worked example** preserved (this section)
+- **1 code change** (23 lines) on feat/jobdori-160-verb-classification
+
+Total: ~5 hours of cycles in ~20 minutes of wall time.
+
+---
+
