@@ -1188,7 +1188,16 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "system-prompt" => parse_system_prompt_args(&rest[1..], output_format),
         "acp" => parse_acp_args(&rest[1..], output_format),
         "login" | "logout" => Err(removed_auth_surface_error(rest[0].as_str())),
-        "init" => Ok(CliAction::Init { output_format }),
+        "init" => {
+            // #152: init is a no-arg verb. Reject unexpected suffixes like `claw init foo`.
+            if rest.len() > 1 {
+                return Err(format!(
+                    "unrecognized argument `{}` for subcommand `init`",
+                    rest[1]
+                ));
+            }
+            Ok(CliAction::Init { output_format })
+        }
         "export" => parse_export_args(&rest[1..], output_format),
         "prompt" => {
             let prompt = rest[1..].join(" ");
