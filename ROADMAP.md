@@ -8828,3 +8828,36 @@ MERGE_CHECKLIST.md (Tier 3 from cycle #70) successfully guided:
 
 ---
 
+
+---
+
+## Cycle #73 Closure: #163 Already Fixed (Backlog-Truthfulness Win)
+
+**Date:** 2026-04-23 04:08 Seoul.
+
+**Finding:** #163 (filed cycle #71) is **ALREADY CLOSED by cycle #72's merge of feat/jobdori-130e-surface-help** (commit `0ca0344`).
+
+**Evidence:**
+- Commit `0ca0344` (fix #130e-A) includes: `"help" => LocalHelpTopic::Meta` in parse_local_help_action()
+- Test `help_help` exists in main.rs: `parse_args(&["help", "--help"])` asserts `LocalHelpTopic::Meta`
+- Fresh binary (built from latest main) tested: `claw help --help` emits help topic correctly
+- Commit message explicitly states: "route help/submit/resume --help to help topics before credential check"
+
+**Why the gap wasn't caught at filing:**
+- Cycle #71 filed #163 based on testing binary at `/tmp/jobdori-161/rust/target/debug/claw` (built BEFORE cycle #72 merges)
+- Cycle #72 merged the #130e-A fix which handles `help --help`
+- Cycle #73 discovered #163 was already closed via fresh test
+
+**Backlog-truthfulness principle validated:**
+- Cycle #60 taught us: "closed with evidence beats silently-open"
+- Cycle #73 applied it: discovered #163 was closed, verified with fresh binary test, documented closure
+- **No duplicate work created.** Worktree `fix/jobdori-163-help-help-selfref` was removed cleanly. Zero branch pollution.
+
+**Cluster status update:**
+- Help-parity family now 100% closed (both filed + implemented)
+- Queue remains 8 branches (no change)
+
+**Doctrine reinforcement:** Always run fresh dogfood on current main after a merge session. Old binaries can produce stale pinpoints. Cycle #72's 4 merges rendered #163's test evidence stale within ~2 hours of filing.
+
+---
+
