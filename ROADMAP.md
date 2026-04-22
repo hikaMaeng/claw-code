@@ -7516,3 +7516,53 @@ Time to apply: ~3 minutes per verb. Infrastructure is mature.
 
 ---
 
+
+---
+
+## Principle: Diagnostic Commands Must Be AT LEAST AS STRICT as Runtime Commands
+
+**Source:** Gaebal-gajae framing on #122 closure (cycle #57, 2026-04-23 02:28 Seoul).
+
+### Statement
+
+When a diagnostic command (`doctor`, `status`, `state`, future `check`/`verify`/`audit` surfaces) reports "ok" for a condition that the runtime command (`prompt`, REPL, `submit`) would warn about, the diagnostic is **actively deceiving the user** — not merely inconsistent.
+
+### Why This Matters
+
+Diagnostics exist specifically to tell users the truth about their setup BEFORE they run the thing. If `claw doctor` says green but `claw prompt` warns red, users will:
+
+1. Run `doctor` → see green
+2. Run `prompt` → hit the warning
+3. Lose trust in `doctor` as a pre-flight tool
+4. Start running `prompt` directly to check conditions (anti-pattern)
+
+Over time, the diagnostic surface becomes ignored, because its promise is "I'll tell you what's wrong." If it lies by omission, users rationally stop consulting it.
+
+### Applied (Cycle #57)
+
+`claw doctor` added stale-base preflight call, matching `Prompt` and REPL dispatch ordering. Now doctor's green signal is trustable — it says what prompt would say, in the same order.
+
+### Future Applications
+
+When adding NEW diagnostic checks or new runtime preflights, enforce the invariant:
+
+> Every preflight check that runs before `Prompt` / REPL must also run (in the same or stricter form) in `doctor`.
+
+Review checklist for runtime/doctor diffs:
+- [ ] Does this check run in `run_turn_loop` or equivalent?
+- [ ] Does it also run in `run_doctor`?
+- [ ] If only in runtime: is there a reason doctor shouldn't catch it?
+- [ ] If yes, is the asymmetry documented as a contract decision (not oversight)?
+
+### Related Principles
+
+- **"Partial success is first-class"** (Philosophy §5): Diagnostic should surface degraded states, not smother them.
+- **"Terminal is transport, not truth"** (Philosophy §6): Doctor output should reflect structured runtime state, not terminal-specific heuristics.
+- **#80-#83 boot preflight family**: Same pattern across different preflight categories.
+
+### Codification
+
+File as permanent principle in CLAUDE.md or PHILOSOPHY.md in a follow-up cycle (not this cycle — just record here).
+
+---
+
