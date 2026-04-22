@@ -8762,3 +8762,69 @@ Or alternately, since `claw help` and `claw --help` are aliases, `claw help --he
 
 ---
 
+
+---
+
+## Cycle #72 Integration: 4 Merges, 9 Branches Landed
+
+**Date:** 2026-04-23 04:05 Seoul
+**Strategy:** Followed MERGE_CHECKLIST.md as execution runbook
+**Result:** First validated execution of Tier 3 artifact
+
+### Merges Executed
+
+1. **docs/parity-update-2026-04-23** (66765ea) — PARITY.md growth stats
+2. **docs/jobdori-162-usage-verb-parity** (378b9bf) — +87 lines USAGE.md for 4 verbs
+3. **feat/jobdori-130e-surface-help** (a6f4e0d) — Linear chain containing:
+   - #251 (session dispatch)
+   - #130b (filesystem context errors)
+   - #130c (diff --help routing)
+   - #130d (config --help routing)
+   - #130e-A (help/submit/resume --help routing)
+   - #130e-B (plugins/prompt --help routing)
+4. **fix/jobdori-161-worktree-git-sha** (d5373ac) — build.rs worktree HEAD resolution
+
+### Clusters Closed
+
+| Cluster | Status Before | Status After |
+|---|---|---|
+| Cluster 6 (Doc-truthfulness, P3) | 2 branches review-ready | 🟢 **MERGED** (both) |
+| Cluster 3 (Help-parity, P1) | 5 branches review-ready | 🟢 **MERGED** (5 via linear chain) |
+| Cluster 1 (Typed-error, P0) | 3 branches review-ready | 🟢 **#251 MERGED**, #248/#249 still pending |
+| Cluster 2 (Diagnostic-strictness, P1) | 3 branches review-ready | 🟢 **#161 MERGED**, #122/#122b still pending |
+
+### Post-Merge Validation (per MERGE_CHECKLIST)
+
+- [x] `cargo build --bin claw` passes
+- [x] `./target/debug/claw version` reports correct SHA (d5373ac)
+- [x] `./target/debug/claw diff --help` routes correctly
+- [x] `./target/debug/claw config --help` routes correctly
+- [x] `./target/debug/claw doctor` runs without crash
+- [x] USAGE.md has all 4 new verb sections (dump-manifests, bootstrap-plan, acp, export)
+- [x] PARITY.md shows 2026-04-23 stats
+
+### Remaining Queue (8 branches)
+
+| Branch | Cluster | Priority | Blocker |
+|---|---|---|---|
+| feat/jobdori-248-unknown-verb-option-classify | 1 Typed-error | P0 | Need rebase on new main (1 commit) |
+| feat/jobdori-249-resumed-slash-kind | 1 Typed-error | P0 | Need rebase on new main (1 commit) |
+| feat/jobdori-122-doctor-stale-base | 2 Diagnostic-strictness | P1 | Need rebase |
+| feat/jobdori-122b-doctor-broad-cwd | 2 Diagnostic-strictness | P1 | Need rebase (same edit locus as #122) |
+| feat/jobdori-152-init-suffix-guard | 4 Suffix-guard | P2 | Need rebase |
+| feat/jobdori-152-bootstrap-plan-suffix-guard | 4 Suffix-guard | P2 | Need rebase |
+| feat/jobdori-127-clean | (other) | (unknown) | Not yet cluster-assigned |
+| feat/jobdori-129-mcp-startup-cred-order | (other) | (unknown) | Not yet cluster-assigned |
+
+### Execution Artifact Validated
+
+MERGE_CHECKLIST.md (Tier 3 from cycle #70) successfully guided:
+- Merge order selection (low-friction first)
+- Per-cluster validation steps (all passed)
+- Conflict avoidance (cluster 2 sequencing planned correctly)
+- Post-merge smoke tests (all passed)
+
+**This validates Tier 3 execution artifacts as a real operational tool**, not just a theoretical framework.
+
+---
+
