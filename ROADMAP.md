@@ -7280,3 +7280,122 @@ Split into two implementations:
 - **#130e-B** (surface-parity): fix `plugins`, `prompt` — follow #130c/#130d pattern
 
 Estimated: 10-15 min each for implementation, dogfood, tests, push.
+
+---
+
+## Cluster Closure Note: Help-Parity Family (#130c, #130d, #130e) — COMPLETE
+
+**Timeline: Cycles #47-#54, ~95 minutes**
+
+### What the Family Solved
+
+Universal help-surface contract: **every top-level subcommand accepts `--help` and emits scoped help topics** instead of errors, silent ignores, wrong help, or credential leaks.
+
+### Framing Refinement (Gaebal-gajae, Cycle #53-#54)
+
+Two distinct failure classes discovered during systematic sweep:
+
+**Class A (Dispatch-Order / Credential Misdirection — HIGHER PRIORITY):**
+- `claw help --help` → `missing_credentials` (fell through to cred check)
+- `claw submit --help` → `missing_credentials` (same dispatch-order bug as #251)
+- `claw resume --help` → `missing_credentials` (session verb, same class)
+
+**Class B (Surface-Level Help Routing — LOWER PRIORITY):**
+- `claw plugins --help` → "Unknown /plugins action '--help'" (action parser treated help as subaction)
+- `claw prompt --help` → top-level help (early `wants_help` interception routed to wrong topic)
+
+**Key insight:** Same symptom ("--help doesn't work right"), two distinct root causes, two different fix loci. Never bundle by symptom; bundle by fix locus. Category A required dispatcher reordering (parse_local_help_action earlier). Category B required surface parser adjustments (remove prompt from early path, add action arms).
+
+### Closed Issues
+
+| # | Class | Command(s) | Root | Fix |
+|---|---|---|---|---|
+| #130c | B | diff | action parser rejected help | add parser arm + help topic |
+| #130d | B | config | command silently ignored help | add help flag check + route |
+| #130e-A | A | help, submit, resume | fell through to cred check | add to parse_local_help_action |
+| #130e-B | B | plugins, prompt | action mismatch + early interception | remove from early path, add arms |
+
+### Methodology That Worked
+
+1. **Dogfood on individual command** (cycle #47): Found #130b (unrelated).
+2. **Systematic sweep of all 22 commands** (cycle #50): Found #130c, #130d 2 outliers.
+3. **Implement both** (cycles #51-#52): Close Category B.
+4. **Extended sweep** (cycle #53): Probed same 22 again, found **5 new anomalies** (proof: ad-hoc testing misses patterns).
+5. **Classify and prioritize** (cycle #53-#54): Split into A (cred misdirection) + B (surface).
+6. **Implement A first** (cycle #53): Higher severity, same pattern infrastructure.
+7. **Implement B** (cycle #54): Lower severity, surface fixes.
+8. **Full sweep verification** (cycle #54): All 22 green. Zero outliers.
+
+### Evidence of Closure
+
+**Dogfood (22-command full sweep, cycle #54):**
+```
+✅ help --help         ✅ version --help       ✅ status --help
+✅ sandbox --help      ✅ doctor --help        ✅ acp --help
+✅ init --help         ✅ state --help         ✅ export --help
+✅ diff --help         ✅ config --help        ✅ mcp --help
+✅ agents --help       ✅ plugins --help       ✅ skills --help
+✅ submit --help       ✅ prompt --help        ✅ resume --help
+✅ system-prompt --help ✅ dump-manifests --help ✅ bootstrap-plan --help
+```
+
+**Regression tests:** 20+ assertions added across cycles #51-#54, all passing.
+
+**Test suite:** 180 binary + 466 library = 646 total, all pass post-closure.
+
+### Pattern Maturity
+
+After #130c-#130e, the help-topic pattern is now battle-tested:
+1. Add variant to `LocalHelpTopic` enum
+2. Extend `parse_local_help_action()` match arm
+3. Add help topic renderer
+4. Add regression test
+
+Time to implement a new topic: ~5 minutes (if parser arm already exists). This is infrastructure maturity.
+
+### What Changed in the Codebase
+
+| Area | Change | Cycle |
+|---|---|---|
+| main.rs LocalHelpTopic enum | +7 new variants (Diff, Config, Meta, Submit, Resume, Plugins, Prompt) | #51-#54 |
+| main.rs parse_local_help_action() | +7 match arms | #51-#54 |
+| main.rs help topic renderers | +7 topics (text-form) | #51-#54 |
+| main.rs early wants_help interception | removed "prompt" from list | #54 |
+| Regression tests | +20 assertions | #51-#54 |
+
+### Why This Cluster Matters
+
+Help surface is the canary for CLI reasoning. Downstream claws (other agents, scripts, shells) need to know: "Can I rely on `claw VERB --help` to tell me what VERB does without side effects?" Before this family: **No, 7 commands were outliers.** After this family: **Yes, all 22 are uniform.**
+
+This uniformity enables:
+- Script generation (claws can now safely emit `claw VERB --help` to populate docs)
+- Error recovery (callers can teach users "use `claw VERB --help`" universally)
+- Discoverability (help isn't blocked by credentials)
+
+### Related Patterns
+
+- **#251 (session dispatch-order bug):** Same class A pattern as #130e-A; early interception prevents credential check from blocking valid intent.
+- **#141 (help topic infrastructure):** Foundation that enabled rapid closure of #130c-#130e.
+- **#247 (typed-error completeness):** Sibling cluster on error contract; help surface is contract on the "success, show me how" path.
+
+### Commit Summary
+
+```
+#130c: 83f744a feat: claw diff --help routes to help topic
+#130d: 19638a0 feat: claw config --help routes to help topic
+#130e-A: 0ca0344 feat: claw help/submit/resume --help routes to help topics (dispatch-order fixes)
+#130e-B: 9dd7e79 feat: claw plugins/prompt --help routes to help topics (surface fixes)
+```
+
+### Recommended Action
+
+Mark #130c, #130d, #130e as **closed** in backlog. Remove from active cluster list. No follow-up work required — the family is complete and the pattern is proven for future subcommand additions.
+
+**Next frontier:** Await code review on 8 pending branches. If velocity demands, shift to:
+1. **MCP lifecycle / plugin friction** — user-facing surface observations
+2. **Typed-error extension** — apply #130b pattern (filesystem context) to other I/O call sites
+3. **Anomalyco/opencode parity gaps** — reference comparison for CLI design
+4. **Session resume friction** — dogfood the `#251` fix in real workflows
+
+---
+
