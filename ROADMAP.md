@@ -9241,3 +9241,57 @@ All three are variants of 'doc claims X, binary does Y' but differ in consumer h
 
 ---
 
+
+---
+
+## Pinpoint #167. Text output format has no contract — `--output-format text` is undefined behavior
+
+**Status: 📋 FILED (cycle #83, 2026-04-23 05:29 Seoul).**
+
+**Finding (dogfood cycle #83):** SCHEMAS.md locks the JSON envelope contract for all 14 clawable commands. Every command must accept `--output-format json` and conform to a specified envelope shape.
+
+**But:** There is NO documented contract for `--output-format text` (the default).
+
+**Reality check:**
+
+```bash
+$ claw list-sessions --output-format text
+SESSION ID            CREATED AT              TURNS
+abc123               2026-04-22 10:00:00     5
+xyz789               2026-04-22 11:15:00     3
+
+$ claw list-sessions --output-format json
+{"kind": "list-sessions", "sessions": [...], "type": "success"}
+```
+
+Text output is **ad hoc per-command**. No two commands are documented to have consistent text formatting, column ordering, or stability across versions.
+
+**Consumer impact:** Claws that want to parse or monitor text output (e.g., for metrics, dashboards, or log aggregation) have no contract to rely on. Text output can change without warning. JSON output is locked; text is not.
+
+**Scope:** All 14 clawable commands.
+
+**Design question:**
+
+**Option A: Document text output contracts** (parallel to JSON envelope schema)
+- Each command's text output format (columns, order, delimiters, header presence)
+- Stability guarantee: text output won't change without schema_version bump
+- Effort: ~4 dev-days (audit 14 commands, document patterns, add tests)
+
+**Option B: Explicitly declare text output unstable**
+- Add caveat to SCHEMAS.md: "text output is for human consumption only; no machine-parsing contract"
+- Point claws to `--output-format json` for automation
+- Effort: ~1 dev-day (doc note + README clarification)
+
+**Option C: Defer** (accept text is undefined for now)
+- Current state: no contract, no guarantee
+- Accept risk that claws may try to parse text anyway
+- Revisit after JSON migration (#164) is complete
+
+**Recommendation:** **Option B** (explicitly declare unstable) as immediate P1 fix. Option A (full text contract) as post-#164 work.
+
+**Related:**
+- #164 (JSON envelope migration) — once complete, text output becomes the "legacy" path
+- #250 (session-management CLI parity) — surface audit that revealed text output inconsistencies
+
+**Dogfood discovery:** Cycle #83 systematic audit of doc surfaces for uncovered contracts. SCHEMAS.md was comprehensive for JSON, but text output was invisible.
+
