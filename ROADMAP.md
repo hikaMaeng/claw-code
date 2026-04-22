@@ -9537,3 +9537,133 @@ Run systematic envelope audit with controlled environment:
 - Document actual vs expected shapes
 - Compare cycle #84 claims vs cycle #86 reality
 
+
+---
+
+## Pinpoint #168a. Per-command JSON envelope shape divergence — CONFIRMED
+
+**Status: 📋 FILED (cycle #87, 2026-04-23 05:52 Seoul). Split from #168 after controlled matrix audit. Cycle #84 primary claim CONFIRMED.**
+
+**Evidence (controlled matrix, cycle #87):**
+
+13 clawable verbs each emit a unique top-level JSON key set. Matrix saved at `/tmp/cycle87-audit/matrix.json`. Summary:
+
+| Verb | Top-level keys |
+|---|---|
+| help | kind, message |
+| version | git_sha, kind, message, target, version |
+| list-sessions | command, sessions |
+| doctor | checks, has_failures, kind, message, report, summary |
+| mcp | action, config_load_error, configured_servers, kind, servers, status, working_directory |
+| skills | action, kind, skills, summary |
+| agents | action, agents, count, kind, summary, working_directory |
+| sandbox | active, active_namespace, ... (14 keys) |
+| status | config_load_error, kind, model, ... (10 keys) |
+| system-prompt | kind, message, sections |
+| bootstrap-plan | kind, phases |
+| export | file, kind, message, messages, session_id |
+| acp | aliases, ..., tracking (10 keys) |
+
+**Observations:**
+
+1. `kind` field is present in 12/13 verbs. Only `list-sessions` uses `command` instead.
+2. `list-sessions`'s `command` field is the lone deviation from `kind` convention.
+3. No two verbs share the same shape. Every verb is bespoke.
+4. Shape is **environment-independent** — same output with/without `ANTHROPIC_AUTH_TOKEN`.
+
+**Consumer impact:** A single JSON parser cannot consume all 13 verbs. Each verb needs custom deserialization logic.
+
+**Phase 0 scope (revised):** This is the true Phase 0 target. Normalize the `kind` field convention (fix `list-sessions` to use `kind` instead of `command`) as the minimum invariant. Other shape divergences are Phase 1 work.
+
+**Effort:** ~0.5 day for `list-sessions` `command` → `kind` normalization. Full shape normalization is Phase 1 (~3 days).
+
+---
+
+## Pinpoint #168b. Bootstrap silent JSON failure claim — REFUTED
+
+**Status: ❌ REFUTED (cycle #87, 2026-04-23 05:52 Seoul). Split from #168 after controlled matrix audit. Cycle #84 claim contradicted by evidence.**
+
+**Cycle #84 claim:** `claw bootstrap hello --output-format json` produces NO output with exit 0 (silent success failure).
+
+**Cycle #87 controlled matrix result:**
+
+```
+no_creds/bootstrap:    exit=1, stdout=0 bytes, stderr=483 bytes
+fake_creds/bootstrap:  exit=1, stdout=0 bytes, stderr=319 bytes
+```
+
+**Actual behavior:**
+
+- Exit code: **1** (not 0 as cycle #84 claimed)
+- Stdout: 0 bytes (cycle #84 correctly observed this)
+- Stderr: 483 bytes (cycle #84 did NOT observe this)
+- Output is routed to **stderr**, not stdout, under `--output-format json`
+
+**Diagnosis:** This is NOT "silent success." The command:
+1. Exits with error code 1 (signaling failure)
+2. Writes error message to stderr (conventional error output)
+3. Produces no stdout (nothing to emit on success path)
+
+A JSON consumer that only reads stdout + checks exit code WILL correctly detect this as failure. The cycle #84 claim of "exit 0 silent failure" was **incorrect**.
+
+**But there IS a related issue:** The stderr output is **not JSON formatted**, even when `--output-format json` is specified. For consistency with JSON contract, error output should also be JSON-formatted on stderr.
+
+**Related filing #168c (proposed):** Error output (stderr) should conform to JSON schema when `--output-format json` is set. Currently mixed (json stdout for success paths, plain stderr for error paths).
+
+**Impact:** `bootstrap`, `dump-manifests`, and `state` all exhibit this pattern (exit 1 + plain stderr).
+
+---
+
+## Pinpoint #168c. Error output routing inconsistency under --output-format json
+
+**Status: 📋 FILED (cycle #87, 2026-04-23 05:52 Seoul). Newly discovered via controlled matrix.**
+
+**Finding:**
+
+Three verbs (`bootstrap`, `dump-manifests`, `state`) with `--output-format json` produce:
+- Exit code 1 (failure signal)
+- Zero bytes on stdout
+- Plain text on stderr (not JSON formatted)
+
+Example:
+```bash
+$ claw bootstrap 'test' --output-format json 2>/dev/null
+# (no stdout output)
+$ claw bootstrap 'test' --output-format json 2>&1 1>/dev/null
+missing Anthropic credentials; export ANTHROPIC_AUTH_TOKEN...
+# Plain text, not JSON
+```
+
+**Consumer impact:** A JSON consumer reading both stdout and stderr under `--output-format json` expects JSON on both streams. This inconsistency breaks that expectation.
+
+**Phase 0 scope:** Add to Phase 0 — JSON contract should require that ALL output under `--output-format json` be JSON-formatted, regardless of stream.
+
+**Effort:** ~0.5 day to normalize stderr output to JSON for bootstrap/dump-manifests/state.
+
+---
+
+## Program: JSON Productization — Phase 0 Revised (Cycle #87)
+
+**Phase 0 rewording (was: "Fix #168 bootstrap silent failure"):**
+
+**Phase 0 — Controlled JSON Baseline Audit & Minimum Invariant Normalization:**
+
+1. ✅ **Controlled matrix audit completed** (cycle #87): Matrix saved at `/tmp/cycle87-audit/matrix.json`. Evidence established.
+
+2. **Minimum invariant normalization (~1 day):**
+   - Fix `list-sessions` `command` → `kind` field (align with 12/13 verb convention)
+   - Fix `bootstrap`/`dump-manifests`/`state` stderr JSON formatting under `--output-format json`
+
+3. **Envelope shape catalog (~0.5 day):**
+   - Document per-command shapes in SCHEMAS.md as "v1.5 baseline catalog"
+   - Each verb has bespoke shape; shape divergence is formally documented
+
+**Phase 0 deliverables:**
+- #168a closed (kind field normalization)
+- #168b closed with refutation (no silent failure)
+- #168c closed (stderr JSON formatting)
+- SCHEMAS.md v1.5 baseline catalog section
+- Shape parity CI test (prevent new divergences)
+
+**Total Phase 0 effort:** ~1.5 days (reduced from "unclear" to concrete work).
+
