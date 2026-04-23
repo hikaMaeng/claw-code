@@ -11098,3 +11098,115 @@ claw dump-manifests --bogus-flag
 **Pinpoint count:** 79 filed (+2 from #188-#189), 65 genuinely open.
 
 **Branch:** `feat/jobdori-168c-emission-routing` @ 35 commits (unchanged code, freeze held).
+
+## Cycle #107 Addendum — Framing Locks + Priority Sequencing (gaebal-gajae, 2026-04-23 11:35 Seoul)
+
+**Per gaebal-gajae cycle #107 validation pass.** Framings locked + doc-truth priority sequencing:
+
+### #188 Authoritative Framing
+
+> "`dump-manifests --help` omits the prerequisite that runtime behavior actually requires."
+
+**Why this framing is surgical:**
+- Names the broken surface (`dump-manifests --help`)
+- Names the gap type (omits prerequisite info)
+- Names the cost (help-text ≠ runtime behavior)
+- No ambiguity: the fix touches help-text output, not verb behavior
+
+### #189 Authoritative Framing
+
+> "`dump-manifests` unknown-option errors still fall through to `unknown` instead of the existing CLI-parse path."
+
+**Parallel structure to #186/#187:**
+- **#186:** `system-prompt` unknown-option errors... instead of the existing CLI-parse classification path
+- **#187:** `export` unknown-option errors... unlike the already-canonical `sandbox` CLI-parse path
+- **#189:** `dump-manifests` unknown-option errors... instead of the existing CLI-parse path
+
+**Three framings, identical structural skeleton.** Bundle target is visually obvious.
+
+### Doc-Truthfulness Sub-Axis Validation (#188)
+
+Per gaebal-gajae: "이건 진짜 별도 sub-axis로 볼 만합니다."
+
+**Doc-truthfulness family now has 2 documented sub-axes:**
+
+```
+Doc-truthfulness family (6 members):
+├── Audit-flow sub-axis (prior 5 members): SCHEMAS.md, USAGE.md, README against declared truth
+│   ├── #76 (README)
+│   ├── #79 (USAGE)
+│   ├── #82 (SCHEMAS)
+│   ├── #172 (SCHEMAS action field)
+│   └── #180 (USAGE verb coverage)
+│
+└── Probe-flow sub-axis (NEW, 1 member so far): CLI --help text vs runtime behavior
+    └── #188 (dump-manifests --help omits prerequisite)
+```
+
+**Why this matters:** Audit-flow requires deliberate comparison (read file A vs file B). Probe-flow discovers doc-truth gaps organically by running the verb. Different discovery methodologies = different surface areas.
+
+### Reclassification Credit (cycle #107 key outcome)
+
+Per gaebal-gajae: **"이번 cycle의 진짜 성과는 'behavior bug처럼 보이던 걸 help-text truthfulness gap으로 정확히 재분류한 #188'입니다."**
+
+**The value was not finding the error.** The value was:
+1. Initial observation: "`dump-manifests` no-args emits error" (looks like bug)
+2. Follow-up check: "USAGE.md says this is intentional" (not bug)
+3. Reclassification: "`--help` doesn't tell users the prerequisite" (real gap, different axis)
+
+**Doctrine lesson:** First observation = hypothesis, not filing. Verify against existing docs before classifying.
+
+### Priority Refinement (per gaebal-gajae)
+
+**#189 priority:** Bundle extension confirmed. `feat/jobdori-186-189-classifier-sweep` covers 3 verbs with same fix pattern. Cheaper than 3 separate PRs.
+
+**#188 priority:** Post-#180 (doc parity sequence).
+- #180 = USAGE.md verb coverage gap (audit-flow doc-truth)
+- #188 = dump-manifests --help prerequisite gap (probe-flow doc-truth)
+- Natural sequencing: fix USAGE.md structural gap first, then fix individual help-text gaps
+
+**Full doc-truth fix sequence:**
+```
+Priority N+k: #180 (USAGE.md standalone verb coverage)
+Priority N+k+1: #188 (dump-manifests --help prerequisite)
+Priority N+k+2: [future probe-flow doc-truth findings]
+```
+
+### Updated Priority Queue (post-#107 reconciliation)
+
+```
+Priority 1: feat/jobdori-181-error-envelope-contract-drift (#181 + #183)
+Priority 2: feat/jobdori-184-cli-contract-hygiene-sweep (#184 + #185)
+Priority 3: feat/jobdori-186-189-classifier-sweep (#186 + #187 + #189)
+Priority 4: feat/jobdori-180-usage-standalone-surface (#180)
+Priority 5: feat/jobdori-188-dump-manifests-help-prerequisite (#188, post-#180)
+Priority 6+: Independent
+  - #182 (plugin classifier alignment)
+  - #177/#178/#179 (install-surface taxonomy)
+  - #173 (config hint field)
+  - #174 (resume trailing classifier)
+  - #175 (gaebal-gajae CI fmt/test decoupling)
+```
+
+### Doctrine Update (#28)
+
+**"First observation is hypothesis, not filing."** When probing a verb and finding unexpected behavior:
+1. Initial observation = potential gap
+2. Before filing: check against SCHEMAS.md, USAGE.md, --help, existing ROADMAP entries
+3. Reclassify if behavior is intentional but doc is misleading
+4. File with precise axis (behavior bug vs doc-truth vs classifier)
+
+**Cost:** 30-60 seconds per probe to verify before filing.
+**Benefit:** Avoids filing "not-a-bug" pinpoints that waste reviewer cycles.
+**Validation:** Cycle #107 #188 reclassification. Saved a false "behavior bug" filing.
+
+### Pinpoint Accounting (post-cycle #107 gaebal-gajae pass)
+
+- **Filed total:** 79 (unchanged)
+- **Genuinely open:** 65
+- **Framings locked:** #188, #189 (both via gaebal-gajae pass)
+- **Priority positioned:** all 7 bundle+independent priorities now explicit
+
+### Doctrine Count
+
+27 → **28 total** (added "first observation is hypothesis")
