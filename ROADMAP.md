@@ -11430,3 +11430,56 @@ Execute Phase 1 bundle sequence (Priority 1–5 + independents). Target executio
 **Next action: Phase 0 merge approval, then Phase 1 execution sequence.**
 
 🪨
+
+---
+
+## State Designation: Merge-Wait Mode (gaebal-gajae, 2026-04-23 12:00 Seoul)
+
+**Authoritative state framing:**
+
+> **"Phase 0 is no longer in discovery mode; it is in merge-wait mode with Phase 1 already precommitted."**
+
+### Mode Distinction (Operational)
+
+| Mode | Behavior | Indicators |
+|---|---|---|
+| **Discovery mode** | Probe + file + refine | New pinpoints, new surfaces |
+| **Merge-wait mode** | Hold state, await signal | No new filings, no new branches |
+| **Execution mode** | Land bundles | New PRs, regression tests |
+
+**Current mode:** Merge-wait (entered 11:58 Seoul).
+
+### Cycle Guard (for future dogfood cycles)
+
+**When cycle triggers fire in merge-wait mode:**
+- ❌ Do NOT start new probes (that's discovery)
+- ❌ Do NOT file new pinpoints (branch is frozen)
+- ❌ Do NOT create new branches (Phase 0 must merge first)
+- ✅ Maintain branch readiness (verify tests pass, no drift)
+- ✅ Report status + wait
+- ✅ Re-enter execution mode only when merge signal arrives
+
+### Doctrine #30 (Final for Phase 0)
+
+**"Modes are state, not suggestions."**
+
+Once closure is declared (discovery → merge-wait), the mode label acts as an operational guard. Re-entering the prior mode requires explicit mode-change trigger (e.g., merge signal + new branch creation).
+
+**Anti-pattern:** Treating merge-wait as "idle time for more exploration"
+**Correct pattern:** Maintain readiness; respond to signal; do not drift
+
+**Validation:** Cycle #110 gaebal-gajae state designation. Locked.
+
+### Mode History (Phase 0 timeline)
+
+- Cycle #97 (2026-04-23 08:00): **Discovery mode** begins
+- Cycle #108 (2026-04-23 11:40): **Discovery exhaustion** criteria met
+- Cycle #109 (2026-04-23 11:48): **Closure** declared (PHASE_1_KICKOFF.md)
+- Cycle #109 (2026-04-23 11:58): **Merge-wait mode** formally entered (gaebal-gajae)
+- Future: **Execution mode** begins when merge signal arrives
+
+---
+
+**Current state: MERGE-WAIT MODE.** Awaiting signal.
+
+🪨
