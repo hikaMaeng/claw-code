@@ -10783,3 +10783,89 @@ Pattern-match heuristic:
 4. If no → new family warranted
 
 This was corrected from "CLI contract hygiene (NEW: 2)" back to "#171 lineage (3 members now)".
+
+## Cycle #105 Priority Lock (gaebal-gajae, 2026-04-23 11:07 Seoul)
+
+**Locked merge priority for cycle #104-#105 pinpoints:**
+
+1. **#181 + #183** (bundled) — error envelope contract drift
+2. **#184 + #185** (bundled) — CLI contract hygiene sweep
+3. **#186** — classifier cleanup (system-prompt)
+
+### Why This Order Minimizes Contract Surface Disruption
+
+**Per gaebal-gajae: "이 순서가 계약 표면을 제일 덜 흔듭니다."**
+
+**Layer analysis:**
+
+1. **#181/#183 first** — establishes canonical error envelope shape for ALL verbs (align to `agents` reference). This is a **foundation contract layer**.
+
+2. **#184/#185 second** — adds guard rails (reject unknown inputs). Depends on #181/#183 because:
+   - When `init`/`bootstrap-plan` learn to reject unknown args, the REJECTION MUST USE the canonical error envelope
+   - If #184/#185 lands first, they'd emit rejections in the old (pre-#181) shape, which would then need to be migrated when #181 lands
+   - Landing #181 first means #184/#185 can emit the FINAL envelope shape on day one
+
+3. **#186 last** — classifier coverage for `system-prompt` option parsing. Depends on both above because:
+   - #186 fix adds a `cli_parse` classifier branch
+   - This branch assumes the error envelope format exists correctly (#181 guarantee)
+   - It also assumes verbs consistently emit `cli_parse` errors on unknown input (#184/#185 guarantee for new verbs in scope)
+
+### Contract Disruption Analysis
+
+| Order | Contract shape changes | Classifier changes | Consumer impact |
+|---|---|---|---|
+| #181 first | 1x (canonical shape lands) | 0 | Consumers update error-envelope dispatch |
+| #184+#185 second | 0 (use existing) | 0 | Consumers see rejection on new verbs, no shape change |
+| #186 third | 0 (use existing) | 1x (new classifier branch) | Consumers see better classification on system-prompt |
+
+**Total contract shape touches: 1. Classifier touches: 1.** Minimal disruption.
+
+### Alternative Orderings (rejected)
+
+- **#186 first:** Classifier fix lands but references error envelope that might still be inconsistent. Future #181 work might revisit classifier when envelope changes.
+- **#184/#185 first:** Silent-accept guards added but emit in outlier shape (`plugins`-style). Would need second patch when #181 canonicalizes.
+- **All bundled:** Single massive PR, hard to review, risky rollback.
+
+### Branch Queue (finalized)
+
+```
+Priority 1 (HIGH, foundation):
+  feat/jobdori-181-error-envelope-contract-drift
+    → bundles #181 + #183
+    → reference: agents canonical shape
+    → est: small-medium (align plugins to agents pattern)
+
+Priority 2 (MEDIUM, extends #171 lineage):
+  feat/jobdori-184-cli-contract-hygiene-sweep
+    → bundles #184 + #185
+    → both unaudited verbs reject unknown input
+    → est: small (clap-style guard per verb)
+
+Priority 3 (MEDIUM, classifier cleanup):
+  feat/jobdori-186-system-prompt-classifier
+    → single classifier branch addition
+    → follows #169/#170 pattern
+    → est: small (1-2 line classifier match)
+```
+
+### Still-Deferred (Post-Priority-3)
+
+| Pinpoint | Branch | Blocked until |
+|---|---|---|
+| #173 | feat/jobdori-173-config-error-json-hints | Priority 1-3 land |
+| #174 | feat/jobdori-174-resume-trailing-cli-parse | Priority 3 lands (same classifier surface) |
+| #177/#178/#179 | feat/jobdori-177-install-surface-taxonomy | Independent, any time post Priority 1 |
+| #180 | feat/jobdori-180-usage-standalone-surface | Independent, doc-only |
+| #182 | feat/jobdori-182-plugin-classifier-alignment | Depends on Priority 1 landing |
+| #175 | feat/gaebal-175-ci-signal-decoupling | Independent, any time |
+
+### Doctrine Update (#25)
+
+**"Contract-surface-first ordering"** — When sequencing multiple fixes that touch the same consumer-facing surface:
+1. Foundation contract layer first (error envelopes, canonical shapes, enum values)
+2. Extending/strengthening guards second (input validation, classifier coverage)
+3. Refinement/cleanup third (edge cases, naming drift)
+
+Rationale: Minimizes contract-shape changes per cycle. Each consumer update cycle costs them more than each classifier update cycle.
+
+**Validation:** Cycle #104-#105 sequence established via gaebal-gajae review. Total disruption: 1 shape change + 1 classifier change across 3 merges.
