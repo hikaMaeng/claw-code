@@ -2779,6 +2779,56 @@ fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
 }
 
 fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
+    let provider = std::env::var("WEB_SEARCH_PROVIDER").unwrap_or_else(|_| String::from("auto"));
+    match provider.as_str() {
+        "auto" => {
+            if std::env::var("TAVILY_API_KEY").is_ok() {
+                return execute_web_search_tavily(input);
+            }
+            if std::env::var("BRAVE_API_KEY").is_ok() {
+                return execute_web_search_brave(input);
+            }
+            if std::env::var("BING_API_KEY").is_ok() {
+                return execute_web_search_bing(input);
+            }
+            if std::env::var("WEB_SEARCH_API").is_ok() {
+                return execute_web_search_custom(input);
+            }
+            execute_web_search_ddg(input)
+        }
+        "ddg" => execute_web_search_ddg(input),
+        "tavily" => {
+            std::env::var("TAVILY_API_KEY").map_err(|_| {
+                String::from("Search provider 'tavily' is not configured. Set TAVILY_API_KEY.")
+            })?;
+            execute_web_search_tavily(input)
+        }
+        "brave" => {
+            std::env::var("BRAVE_API_KEY").map_err(|_| {
+                String::from("Search provider 'brave' is not configured. Set BRAVE_API_KEY.")
+            })?;
+            execute_web_search_brave(input)
+        }
+        "bing" => {
+            std::env::var("BING_API_KEY").map_err(|_| {
+                String::from("Search provider 'bing' is not configured. Set BING_API_KEY.")
+            })?;
+            execute_web_search_bing(input)
+        }
+        "custom" => {
+            std::env::var("WEB_SEARCH_API").map_err(|_| {
+                String::from("Search provider 'custom' is not configured. Set WEB_SEARCH_API.")
+            })?;
+            execute_web_search_custom(input)
+        }
+        other => Err(format!(
+            "Unknown WEB_SEARCH_PROVIDER '{}'. Valid: auto, ddg, tavily, brave, bing, custom",
+            other
+        )),
+    }
+}
+
+fn execute_web_search_ddg(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
     let started = Instant::now();
     let client = build_http_client()?;
     let search_url = build_search_url(&input.query)?;
@@ -2795,18 +2845,206 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
         hits = extract_search_hits_from_generic_links(&html);
     }
 
+    apply_domain_filters(input, &mut hits);
+    dedupe_hits(&mut hits);
+    hits.truncate(8);
+
+    Ok(build_search_output(
+        input.query.clone(),
+        hits,
+        started.elapsed().as_secs_f64(),
+    ))
+}
+
+fn execute_web_search_tavily(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
+    let started = Instant::now();
+    let key = std::env::var("TAVILY_API_KEY").unwrap();
+    let client = build_http_client()?;
+    let resp = client
+        .post("https://api.tavily.com/search")
+        .bearer_auth(&key)
+        .json(&serde_json::json!({
+            "query": input.query,
+            "max_results": 15,
+            "include_answer": false,
+        }))
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Tavily HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let mut hits: Vec<SearchHit> = data["results"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    Some(SearchHit {
+                        title: r["title"].as_str()?.to_string(),
+                        url: r["url"].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    apply_domain_filters(input, &mut hits);
+    dedupe_hits(&mut hits);
+    hits.truncate(8);
+    Ok(build_search_output(
+        input.query.clone(),
+        hits,
+        started.elapsed().as_secs_f64(),
+    ))
+}
+
+fn execute_web_search_brave(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
+    let started = Instant::now();
+    let key = std::env::var("BRAVE_API_KEY").unwrap();
+    let client = build_http_client()?;
+    let mut url = reqwest::Url::parse("https://api.search.brave.com/res/v1/web/search")
+        .map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("q", &input.query);
+    url.query_pairs_mut().append_pair("count", "15");
+    let resp = client
+        .get(url)
+        .header("Accept", "application/json")
+        .header("Accept-Encoding", "gzip")
+        .header("X-Subscription-Token", &key)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Brave HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let mut hits: Vec<SearchHit> = data["web"]["results"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    Some(SearchHit {
+                        title: r["title"].as_str()?.to_string(),
+                        url: r["url"].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    apply_domain_filters(input, &mut hits);
+    dedupe_hits(&mut hits);
+    hits.truncate(8);
+    Ok(build_search_output(
+        input.query.clone(),
+        hits,
+        started.elapsed().as_secs_f64(),
+    ))
+}
+
+fn execute_web_search_bing(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
+    let started = Instant::now();
+    let key = std::env::var("BING_API_KEY").unwrap();
+    let client = build_http_client()?;
+    let mut url = reqwest::Url::parse("https://api.bing.microsoft.com/v7.0/search")
+        .map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("q", &input.query);
+    url.query_pairs_mut().append_pair("count", "15");
+    let resp = client
+        .get(url)
+        .header("Ocp-Apim-Subscription-Key", &key)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Bing HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let mut hits: Vec<SearchHit> = data["webPages"]["value"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    Some(SearchHit {
+                        title: r["name"].as_str()?.to_string(),
+                        url: r["url"].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    apply_domain_filters(input, &mut hits);
+    dedupe_hits(&mut hits);
+    hits.truncate(8);
+    Ok(build_search_output(
+        input.query.clone(),
+        hits,
+        started.elapsed().as_secs_f64(),
+    ))
+}
+
+fn execute_web_search_custom(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
+    let started = Instant::now();
+    let base = std::env::var("WEB_SEARCH_API").unwrap();
+    let client = build_http_client()?;
+    let mut url = reqwest::Url::parse(&base).map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("q", &input.query);
+    let resp = client.get(url).send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Custom search HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let mut hits: Vec<SearchHit> = data
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    Some(SearchHit {
+                        title: r["title"].as_str()?.to_string(),
+                        url: r["url"].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    apply_domain_filters(input, &mut hits);
+    dedupe_hits(&mut hits);
+    hits.truncate(8);
+    Ok(build_search_output(
+        input.query.clone(),
+        hits,
+        started.elapsed().as_secs_f64(),
+    ))
+}
+
+fn apply_domain_filters(input: &WebSearchInput, hits: &mut Vec<SearchHit>) {
     if let Some(allowed) = input.allowed_domains.as_ref() {
         hits.retain(|hit| host_matches_list(&hit.url, allowed));
     }
     if let Some(blocked) = input.blocked_domains.as_ref() {
         hits.retain(|hit| !host_matches_list(&hit.url, blocked));
     }
+}
 
-    dedupe_hits(&mut hits);
-    hits.truncate(8);
-
+fn build_search_output(
+    query: String,
+    hits: Vec<SearchHit>,
+    duration_seconds: f64,
+) -> WebSearchOutput {
     let summary = if hits.is_empty() {
-        format!("No web search results matched the query {:?}.", input.query)
+        format!("No web search results matched the query {:?}.", query)
     } else {
         let rendered_hits = hits
             .iter()
@@ -2815,12 +3053,11 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
             .join("\n");
         format!(
             "Search results for {:?}. Include a Sources section in the final answer.\n{}",
-            input.query, rendered_hits
+            query, rendered_hits
         )
     };
-
-    Ok(WebSearchOutput {
-        query: input.query.clone(),
+    WebSearchOutput {
+        query,
         results: vec![
             WebSearchResultItem::Commentary(summary),
             WebSearchResultItem::SearchResult {
@@ -2828,9 +3065,10 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
                 content: hits,
             },
         ],
-        duration_seconds: started.elapsed().as_secs_f64(),
-    })
+        duration_seconds,
+    }
 }
+
 
 fn build_http_client() -> Result<Client, String> {
     Client::builder()
