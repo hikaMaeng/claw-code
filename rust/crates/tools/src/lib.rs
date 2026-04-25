@@ -2822,8 +2822,16 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
             }
             execute_web_search_custom(input, api_key)
         }
+        "firecrawl" => {
+            if api_key.is_empty() {
+                return Err(String::from(
+                    "websearch.apiKey is required for provider 'firecrawl'. Set it in .claw/settings.json",
+                ));
+            }
+            execute_web_search_firecrawl(input, api_key)
+        }
         other => Err(format!(
-            "Unknown websearch.provider '{other}'. Valid: ddg, tavily, brave, bing, custom",
+            "Unknown websearch.provider '{other}'. Valid: ddg, tavily, brave, bing, firecrawl, custom",
         )),
     }
 }
@@ -2910,7 +2918,6 @@ fn execute_web_search_brave(input: &WebSearchInput, api_key: &str) -> Result<Web
     let resp = client
         .get(url)
         .header("Accept", "application/json")
-        .header("Accept-Encoding", "gzip")
         .header("X-Subscription-Token", api_key)
         .send()
         .map_err(|e| e.to_string())?;
@@ -3009,6 +3016,52 @@ fn execute_web_search_custom(input: &WebSearchInput, endpoint: &str) -> Result<W
                 .filter_map(|r| {
                     Some(SearchHit {
                         title: r["title"].as_str()?.to_string(),
+                        url: r["url"].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    apply_domain_filters(input, &mut hits);
+    dedupe_hits(&mut hits);
+    hits.truncate(8);
+    Ok(build_search_output(
+        input.query.clone(),
+        hits,
+        started.elapsed().as_secs_f64(),
+    ))
+}
+
+fn execute_web_search_firecrawl(input: &WebSearchInput, api_key: &str) -> Result<WebSearchOutput, String> {
+    let started = Instant::now();
+    let client = build_http_client()?;
+    let limit = 10u64;
+    let body = serde_json::json!({
+        "query": input.query,
+        "limit": limit,
+    });
+    let resp = client
+        .post("https://api.firecrawl.dev/v1/search")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Firecrawl HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let mut hits: Vec<SearchHit> = data["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    Some(SearchHit {
+                        title: r["title"].as_str().unwrap_or("").to_string(),
                         url: r["url"].as_str()?.to_string(),
                     })
                 })
