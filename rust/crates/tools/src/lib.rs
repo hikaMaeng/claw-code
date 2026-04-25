@@ -2806,22 +2806,6 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
             }
             execute_web_search_brave(input, api_key)
         }
-        "bing" => {
-            if api_key.is_empty() {
-                return Err(String::from(
-                    "websearch.apiKey is required for provider 'bing'. Set it in .claw/settings.json",
-                ));
-            }
-            execute_web_search_bing(input, api_key)
-        }
-        "custom" => {
-            if api_key.is_empty() {
-                return Err(String::from(
-                    "websearch.apiKey must be the endpoint URL for provider 'custom'. Set it in .claw/settings.json",
-                ));
-            }
-            execute_web_search_custom(input, api_key)
-        }
         "firecrawl" => {
             if api_key.is_empty() {
                 return Err(String::from(
@@ -2831,7 +2815,7 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
             execute_web_search_firecrawl(input, api_key)
         }
         other => Err(format!(
-            "Unknown websearch.provider '{other}'. Valid: ddg, tavily, brave, bing, firecrawl, custom",
+            "Unknown websearch.provider '{other}'. Valid: ddg, tavily, brave, firecrawl",
         )),
     }
 }
@@ -2930,86 +2914,6 @@ fn execute_web_search_brave(input: &WebSearchInput, api_key: &str) -> Result<Web
     }
     let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
     let mut hits: Vec<SearchHit> = data["web"]["results"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| {
-                    Some(SearchHit {
-                        title: r["title"].as_str()?.to_string(),
-                        url: r["url"].as_str()?.to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    apply_domain_filters(input, &mut hits);
-    dedupe_hits(&mut hits);
-    hits.truncate(8);
-    Ok(build_search_output(
-        input.query.clone(),
-        hits,
-        started.elapsed().as_secs_f64(),
-    ))
-}
-
-fn execute_web_search_bing(input: &WebSearchInput, api_key: &str) -> Result<WebSearchOutput, String> {
-    let started = Instant::now();
-    let client = build_http_client()?;
-    let mut url = reqwest::Url::parse("https://api.bing.microsoft.com/v7.0/search")
-        .map_err(|e| e.to_string())?;
-    url.query_pairs_mut().append_pair("q", &input.query);
-    url.query_pairs_mut().append_pair("count", "15");
-    let resp = client
-        .get(url)
-        .header("Ocp-Apim-Subscription-Key", api_key)
-        .send()
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Bing HTTP {}: {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
-    }
-    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut hits: Vec<SearchHit> = data["webPages"]["value"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| {
-                    Some(SearchHit {
-                        title: r["name"].as_str()?.to_string(),
-                        url: r["url"].as_str()?.to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    apply_domain_filters(input, &mut hits);
-    dedupe_hits(&mut hits);
-    hits.truncate(8);
-    Ok(build_search_output(
-        input.query.clone(),
-        hits,
-        started.elapsed().as_secs_f64(),
-    ))
-}
-
-fn execute_web_search_custom(input: &WebSearchInput, endpoint: &str) -> Result<WebSearchOutput, String> {
-    let started = Instant::now();
-    let client = build_http_client()?;
-    let mut url = reqwest::Url::parse(endpoint).map_err(|e| e.to_string())?;
-    url.query_pairs_mut().append_pair("q", &input.query);
-    let resp = client.get(url).send().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Custom search HTTP {}: {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
-    }
-    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut hits: Vec<SearchHit> = data
         .as_array()
         .map(|arr| {
             arr.iter()
