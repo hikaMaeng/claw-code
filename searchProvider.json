@@ -1,0 +1,35 @@
+{
+  "ddg": {
+    "method": "GET",
+    "endpoint": "https://html.duckduckgo.com/html/",
+    "queryParam": "q",
+    "format": "html"
+  },
+  "tavily": {
+    "method": "POST",
+    "endpoint": "https://api.tavily.com/search",
+    "auth": "bearer",
+    "body": { "query": "$q", "max_results": 15, "include_answer": false },
+    "resultPath": "results",
+    "titleField": "title",
+    "urlField": "url"
+  },
+  "brave": {
+    "method": "GET",
+    "endpoint": "https://api.search.brave.com/res/v1/web/search",
+    "auth": "header:X-Subscription-Token",
+    "queryParam": "q",
+    "resultPath": "web.results",
+    "titleField": "title",
+    "urlField": "url"
+  },
+  "firecrawl": {
+    "method": "POST",
+    "endpoint": "https://api.firecrawl.dev/v1/search",
+    "auth": "bearer",
+    "body": { "query": "$q", "limit": 10 },
+    "resultPath": "data",
+    "titleField": "title",
+    "urlField": "url"
+  }
+}

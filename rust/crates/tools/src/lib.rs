@@ -2779,6 +2779,68 @@ fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
     })
 }
 
+/// Locate searchProvider.json: workspace .claw/ → user ~/.config/claw/ → /etc/claw/
+fn load_search_provider_spec(provider: &str) -> Result<serde_json::Value, String> {
+    let candidates: Vec<std::path::PathBuf> = [
+        // workspace-local override
+        std::env::current_dir()
+            .ok()
+            .map(|d| d.join(".claw/searchProvider.json")),
+        // user config dir  (~/.config/claw/searchProvider.json)
+        std::env::var("HOME")
+            .ok()
+            .map(|h| std::path::PathBuf::from(h).join(".config/claw/searchProvider.json")),
+        // system default shipped with the image
+        Some(std::path::PathBuf::from("/etc/claw/searchProvider.json")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for path in &candidates {
+        if !path.exists() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| format!("searchProvider.json read error ({path:?}): {e}"))?;
+        let all: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("searchProvider.json parse error ({path:?}): {e}"))?;
+        if let Some(spec) = all.get(provider) {
+            return Ok(spec.clone());
+        }
+    }
+
+    Err(format!(
+        "No spec found for provider '{provider}' in searchProvider.json \
+         (checked: {candidates:?})"
+    ))
+}
+
+/// Resolve a dot-separated path like "web.results" through a JSON value.
+fn json_path<'a>(mut val: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    for key in path.split('.') {
+        val = &val[key];
+    }
+    val
+}
+
+/// Substitute "$q" placeholder with the actual query string inside a JSON body template.
+fn substitute_query(val: &serde_json::Value, query: &str) -> serde_json::Value {
+    match val {
+        serde_json::Value::String(s) => {
+            serde_json::Value::String(s.replace("$q", query))
+        }
+        serde_json::Value::Object(map) => {
+            serde_json::Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), substitute_query(v, query)))
+                    .collect(),
+            )
+        }
+        other => other.clone(),
+    }
+}
+
 fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let config = ConfigLoader::default_for(&cwd)
@@ -2788,190 +2850,122 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
     let provider = ws.provider.as_deref().unwrap_or("ddg");
     let api_key = ws.api_key.as_deref().unwrap_or("");
 
-    match provider {
-        "ddg" | "auto" => execute_web_search_ddg(input),
-        "tavily" => {
-            if api_key.is_empty() {
-                return Err(String::from(
-                    "websearch.apiKey is required for provider 'tavily'. Set it in .claw/settings.json",
-                ));
-            }
-            execute_web_search_tavily(input, api_key)
+    let spec = load_search_provider_spec(provider)?;
+
+    // HTML format (DDG-style) — uses the built-in HTML parser
+    let format = spec["format"].as_str().unwrap_or("json");
+    if format == "html" {
+        return execute_web_search_html(input, &spec);
+    }
+
+    // JSON API providers
+    let endpoint = spec["endpoint"]
+        .as_str()
+        .ok_or_else(|| format!("searchProvider.json: '{provider}' missing 'endpoint'"))?;
+    let method = spec["method"].as_str().unwrap_or("GET");
+    let result_path = spec["resultPath"].as_str().unwrap_or("results");
+    let title_field = spec["titleField"].as_str().unwrap_or("title");
+    let url_field = spec["urlField"].as_str().unwrap_or("url");
+
+    // auth
+    let auth_spec = spec["auth"].as_str().unwrap_or("none");
+    let needs_key = auth_spec != "none" && auth_spec != "";
+    if needs_key && api_key.is_empty() {
+        return Err(format!(
+            "websearch.apiKey is required for provider '{provider}'. \
+             Set it in .claw/settings.json"
+        ));
+    }
+
+    let started = Instant::now();
+    let client = build_http_client()?;
+
+    let resp = match method {
+        "POST" => {
+            let body = substitute_query(&spec["body"], &input.query);
+            let mut req = client.post(endpoint).json(&body);
+            req = apply_auth(req, auth_spec, api_key);
+            req.send().map_err(|e| e.to_string())?
         }
-        "brave" => {
-            if api_key.is_empty() {
-                return Err(String::from(
-                    "websearch.apiKey is required for provider 'brave'. Set it in .claw/settings.json",
-                ));
-            }
-            execute_web_search_brave(input, api_key)
+        _ => {
+            // GET
+            let query_param = spec["queryParam"].as_str().unwrap_or("q");
+            let mut url =
+                reqwest::Url::parse(endpoint).map_err(|e| e.to_string())?;
+            url.query_pairs_mut().append_pair(query_param, &input.query);
+            let mut req = client.get(url).header("Accept", "application/json");
+            req = apply_auth(req, auth_spec, api_key);
+            req.send().map_err(|e| e.to_string())?
         }
-        "firecrawl" => {
-            if api_key.is_empty() {
-                return Err(String::from(
-                    "websearch.apiKey is required for provider 'firecrawl'. Set it in .claw/settings.json",
-                ));
-            }
-            execute_web_search_firecrawl(input, api_key)
-        }
-        other => Err(format!(
-            "Unknown websearch.provider '{other}'. Valid: ddg, tavily, brave, firecrawl",
-        )),
+    };
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "{provider} HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+
+    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let mut hits: Vec<SearchHit> = json_path(&data, result_path)
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    Some(SearchHit {
+                        title: r[title_field].as_str().unwrap_or("").to_string(),
+                        url: r[url_field].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    apply_domain_filters(input, &mut hits);
+    dedupe_hits(&mut hits);
+    hits.truncate(8);
+    Ok(build_search_output(
+        input.query.clone(),
+        hits,
+        started.elapsed().as_secs_f64(),
+    ))
+}
+
+fn apply_auth(
+    req: reqwest::blocking::RequestBuilder,
+    auth_spec: &str,
+    api_key: &str,
+) -> reqwest::blocking::RequestBuilder {
+    if auth_spec == "bearer" {
+        req.bearer_auth(api_key)
+    } else if let Some(header_name) = auth_spec.strip_prefix("header:") {
+        req.header(header_name, api_key)
+    } else {
+        req
     }
 }
 
-fn execute_web_search_ddg(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
+fn execute_web_search_html(
+    input: &WebSearchInput,
+    spec: &serde_json::Value,
+) -> Result<WebSearchOutput, String> {
     let started = Instant::now();
     let client = build_http_client()?;
-    let search_url = build_search_url(&input.query)?;
-    let response = client
-        .get(search_url)
-        .send()
-        .map_err(|error| error.to_string())?;
+    let endpoint = spec["endpoint"]
+        .as_str()
+        .unwrap_or("https://html.duckduckgo.com/html/");
+    let query_param = spec["queryParam"].as_str().unwrap_or("q");
+    let mut url = reqwest::Url::parse(endpoint).map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair(query_param, &input.query);
 
+    let response = client.get(url).send().map_err(|e| e.to_string())?;
     let final_url = response.url().clone();
-    let html = response.text().map_err(|error| error.to_string())?;
+    let html = response.text().map_err(|e| e.to_string())?;
     let mut hits = extract_search_hits(&html);
-
     if hits.is_empty() && final_url.host_str().is_some() {
         hits = extract_search_hits_from_generic_links(&html);
     }
-
-    apply_domain_filters(input, &mut hits);
-    dedupe_hits(&mut hits);
-    hits.truncate(8);
-
-    Ok(build_search_output(
-        input.query.clone(),
-        hits,
-        started.elapsed().as_secs_f64(),
-    ))
-}
-
-fn execute_web_search_tavily(input: &WebSearchInput, api_key: &str) -> Result<WebSearchOutput, String> {
-    let started = Instant::now();
-    let client = build_http_client()?;
-    let resp = client
-        .post("https://api.tavily.com/search")
-        .bearer_auth(api_key)
-        .json(&serde_json::json!({
-            "query": input.query,
-            "max_results": 15,
-            "include_answer": false,
-        }))
-        .send()
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Tavily HTTP {}: {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
-    }
-    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut hits: Vec<SearchHit> = data["results"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| {
-                    Some(SearchHit {
-                        title: r["title"].as_str()?.to_string(),
-                        url: r["url"].as_str()?.to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    apply_domain_filters(input, &mut hits);
-    dedupe_hits(&mut hits);
-    hits.truncate(8);
-    Ok(build_search_output(
-        input.query.clone(),
-        hits,
-        started.elapsed().as_secs_f64(),
-    ))
-}
-
-fn execute_web_search_brave(input: &WebSearchInput, api_key: &str) -> Result<WebSearchOutput, String> {
-    let started = Instant::now();
-    let client = build_http_client()?;
-    let mut url = reqwest::Url::parse("https://api.search.brave.com/res/v1/web/search")
-        .map_err(|e| e.to_string())?;
-    url.query_pairs_mut().append_pair("q", &input.query);
-    url.query_pairs_mut().append_pair("count", "15");
-    let resp = client
-        .get(url)
-        .header("Accept", "application/json")
-        .header("X-Subscription-Token", api_key)
-        .send()
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Brave HTTP {}: {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
-    }
-    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut hits: Vec<SearchHit> = data["web"]["results"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| {
-                    Some(SearchHit {
-                        title: r["title"].as_str()?.to_string(),
-                        url: r["url"].as_str()?.to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    apply_domain_filters(input, &mut hits);
-    dedupe_hits(&mut hits);
-    hits.truncate(8);
-    Ok(build_search_output(
-        input.query.clone(),
-        hits,
-        started.elapsed().as_secs_f64(),
-    ))
-}
-
-fn execute_web_search_firecrawl(input: &WebSearchInput, api_key: &str) -> Result<WebSearchOutput, String> {
-    let started = Instant::now();
-    let client = build_http_client()?;
-    let limit = 10u64;
-    let body = serde_json::json!({
-        "query": input.query,
-        "limit": limit,
-    });
-    let resp = client
-        .post("https://api.firecrawl.dev/v1/search")
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Firecrawl HTTP {}: {}",
-            resp.status(),
-            resp.text().unwrap_or_default()
-        ));
-    }
-    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let mut hits: Vec<SearchHit> = data["data"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| {
-                    Some(SearchHit {
-                        title: r["title"].as_str().unwrap_or("").to_string(),
-                        url: r["url"].as_str()?.to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
     apply_domain_filters(input, &mut hits);
     dedupe_hits(&mut hits);
     hits.truncate(8);
