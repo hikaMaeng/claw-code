@@ -91,6 +91,7 @@ enum FieldType {
     String,
     Bool,
     Object,
+    Array,
     StringArray,
     Number,
 }
@@ -101,6 +102,7 @@ impl FieldType {
             Self::String => "a string",
             Self::Bool => "a boolean",
             Self::Object => "an object",
+            Self::Array => "an array",
             Self::StringArray => "an array of strings",
             Self::Number => "a number",
         }
@@ -111,6 +113,7 @@ impl FieldType {
             Self::String => value.as_str().is_some(),
             Self::Bool => value.as_bool().is_some(),
             Self::Object => value.as_object().is_some(),
+            Self::Array => value.as_array().is_some(),
             Self::StringArray => value
                 .as_array()
                 .is_some_and(|arr| arr.iter().all(|v| v.as_str().is_some())),
@@ -188,6 +191,14 @@ const TOP_LEVEL_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         name: "aliases",
         expected: FieldType::Object,
+    },
+    FieldSpec {
+        name: "providers",
+        expected: FieldType::Object,
+    },
+    FieldSpec {
+        name: "models",
+        expected: FieldType::Array,
     },
     FieldSpec {
         name: "providerFallbacks",

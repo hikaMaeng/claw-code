@@ -46,6 +46,54 @@ impl ProviderClient {
         }
     }
 
+    pub fn from_settings_provider(
+        provider_type: &str,
+        url: &str,
+        api_key: Option<&str>,
+    ) -> Result<Self, ApiError> {
+        let normalized = provider_type.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "anthropic" => {
+                let Some(api_key) = api_key.filter(|value| !value.is_empty()) else {
+                    return Err(ApiError::missing_credentials("Anthropic", &["apiKey"]));
+                };
+                Ok(Self::Anthropic(
+                    AnthropicClient::from_auth(AuthSource::ApiKey(api_key.to_string()))
+                        .with_base_url(url),
+                ))
+            }
+            "xai" => {
+                let Some(api_key) = api_key.filter(|value| !value.is_empty()) else {
+                    return Err(ApiError::missing_credentials("xAI", &["apiKey"]));
+                };
+                Ok(Self::Xai(
+                    OpenAiCompatClient::new(api_key, OpenAiCompatConfig::xai()).with_base_url(url),
+                ))
+            }
+            "openai" => Ok(Self::OpenAi(
+                OpenAiCompatClient::new(
+                    api_key
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("local-dev-token"),
+                    OpenAiCompatConfig::openai(),
+                )
+                .with_base_url(url),
+            )),
+            "dashscope" => {
+                let Some(api_key) = api_key.filter(|value| !value.is_empty()) else {
+                    return Err(ApiError::missing_credentials("DashScope", &["apiKey"]));
+                };
+                Ok(Self::OpenAi(
+                    OpenAiCompatClient::new(api_key, OpenAiCompatConfig::dashscope())
+                        .with_base_url(url),
+                ))
+            }
+            other => Err(ApiError::Auth(format!(
+                "unsupported provider type '{other}'. Use anthropic, xai, openai, or dashscope"
+            ))),
+        }
+    }
+
     #[must_use]
     pub const fn provider_kind(&self) -> ProviderKind {
         match self {
@@ -173,6 +221,24 @@ mod tests {
             detect_provider_kind("claude-sonnet-4-6"),
             ProviderKind::Anthropic
         );
+    }
+
+    #[test]
+    fn settings_provider_builds_openai_client_without_env_routing() {
+        let _lock = env_lock();
+        let _openai = EnvVarGuard::set("OPENAI_API_KEY", None);
+        let _openai_base = EnvVarGuard::set("OPENAI_BASE_URL", None);
+
+        let client =
+            ProviderClient::from_settings_provider("openai", "http://192.168.0.6:12345/v1", None)
+                .expect("local openai-compatible providers should not require env vars");
+
+        match client {
+            ProviderClient::OpenAi(openai_client) => {
+                assert_eq!(openai_client.base_url(), "http://192.168.0.6:12345/v1");
+            }
+            other => panic!("expected OpenAi settings provider, got {other:?}"),
+        }
     }
 
     /// Snapshot-restore guard for a single environment variable. Mirrors

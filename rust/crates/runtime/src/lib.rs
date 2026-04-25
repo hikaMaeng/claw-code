@@ -59,10 +59,10 @@ pub use compact::{
 pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, McpConfigCollection,
     McpManagedProxyServerConfig, McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig,
-    McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig,
-    ProviderFallbackConfig, ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig,
-    WebSearchConfig,
-    RuntimeHookConfig, RuntimePermissionRuleConfig, RuntimePluginConfig, ScopedMcpServerConfig,
+    McpServerConfig, McpStdioServerConfig, McpTransport, McpWebSocketServerConfig,
+    ModelProviderConfig, ModelRegistryEntry, OAuthConfig, ProviderFallbackConfig,
+    ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig,
+    RuntimePermissionRuleConfig, RuntimePluginConfig, ScopedMcpServerConfig, WebSearchConfig,
     CLAW_SETTINGS_SCHEMA_NAME,
 };
 pub use config_validate::{
@@ -70,9 +70,9 @@ pub use config_validate::{
     DiagnosticKind, ValidationResult,
 };
 pub use conversation::{
-    auto_compaction_threshold_from_env, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
-    ConversationRuntime, PromptCacheEvent, RuntimeError, StaticToolExecutor, ToolError,
-    ToolExecutor, TurnSummary,
+    auto_compaction_threshold_from_max_context, ApiClient, ApiRequest, AssistantEvent,
+    AutoCompactionEvent, ConversationRuntime, PromptCacheEvent, RuntimeError, StaticToolExecutor,
+    ToolError, ToolExecutor, TurnSummary,
 };
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,

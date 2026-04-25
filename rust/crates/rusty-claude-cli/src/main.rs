@@ -46,9 +46,9 @@ use runtime::{
     load_system_prompt, pricing_for_model, resolve_expected_base, resolve_sandbox_status,
     ApiClient, ApiRequest, AssistantEvent, CompactionConfig, ConfigLoader, ConfigSource,
     ContentBlock, ConversationMessage, ConversationRuntime, McpServer, McpServerManager,
-    McpServerSpec, McpTool, MessageRole, ModelPricing, PermissionMode, PermissionPolicy,
-    ProjectContext, PromptCacheEvent, ResolvedPermissionMode, RuntimeError, Session, TokenUsage,
-    ToolError, ToolExecutor, UsageTracker,
+    McpServerSpec, McpTool, MessageRole, ModelPricing, ModelProviderConfig, PermissionMode,
+    PermissionPolicy, ProjectContext, PromptCacheEvent, ResolvedPermissionMode, RuntimeError,
+    Session, TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -66,10 +66,7 @@ const DEFAULT_MODEL: &str = "claude-opus-4-6";
 enum ModelSource {
     /// Explicit `--model` / `--model=` CLI flag.
     Flag,
-    /// ANTHROPIC_MODEL environment variable (when no flag was passed).
-    Env,
-    /// `model` key in `.claw.json` / `.claw/settings.json` (when neither
-    /// flag nor env set it).
+    /// `model` key in `.claw.json` / `.claw/settings.json` when no flag set it.
     Config,
     /// Compiled-in DEFAULT_MODEL fallback.
     Default,
@@ -79,7 +76,6 @@ impl ModelSource {
     fn as_str(&self) -> &'static str {
         match self {
             ModelSource::Flag => "flag",
-            ModelSource::Env => "env",
             ModelSource::Config => "config",
             ModelSource::Default => "default",
         }
@@ -114,8 +110,8 @@ impl ModelProvenance {
     }
 
     fn from_env_or_config_or_default(cli_model: &str) -> Self {
-        // Only called when no --model flag was passed. Probe env first,
-        // then config, else fall back to default. Mirrors the logic in
+        // Only called when no --model flag was passed. Probe config first,
+        // else fall back to default. Mirrors the logic in
         // resolve_repl_model() but captures the source.
         if cli_model != DEFAULT_MODEL {
             // Already resolved from some prior path; treat as flag.
@@ -123,17 +119,6 @@ impl ModelProvenance {
                 resolved: cli_model.to_string(),
                 raw: Some(cli_model.to_string()),
                 source: ModelSource::Flag,
-            };
-        }
-        if let Some(env_model) = env::var("ANTHROPIC_MODEL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        {
-            return Self {
-                resolved: resolve_model_alias_with_config(&env_model),
-                raw: Some(env_model),
-                source: ModelSource::Env,
             };
         }
         if let Some(config_model) = config_model_for_current_dir() {
@@ -228,8 +213,10 @@ fn main() {
             // don't need to regex-scrape the prose.
             let kind = classify_error_kind(&message);
             if message.contains("`claw --help`") {
-                eprintln!("[error-kind: {kind}]
-error: {message}");
+                eprintln!(
+                    "[error-kind: {kind}]
+error: {message}"
+                );
             } else {
                 eprintln!(
                     "[error-kind: {kind}]
@@ -372,7 +359,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             model_flag_raw,
             permission_mode,
             output_format,
-        } => print_status_snapshot(&model, model_flag_raw.as_deref(), permission_mode, output_format)?,
+        } => print_status_snapshot(
+            &model,
+            model_flag_raw.as_deref(),
+            permission_mode,
+            output_format,
+        )?,
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
         CliAction::Prompt {
             prompt,
@@ -412,19 +404,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Config {
             section,
             output_format,
-        } => {
-            match output_format {
-                CliOutputFormat::Text => {
-                    println!("{}", render_config_report(section.as_deref())?);
-                }
-                CliOutputFormat::Json => {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&render_config_json(section.as_deref())?)?
-                    );
-                }
+        } => match output_format {
+            CliOutputFormat::Text => {
+                println!("{}", render_config_report(section.as_deref())?);
             }
-        }
+            CliOutputFormat::Json => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&render_config_json(section.as_deref())?)?
+                );
+            }
+        },
         CliAction::Diff { output_format } => match output_format {
             CliOutputFormat::Text => {
                 println!("{}", render_diff_report()?);
@@ -627,13 +617,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--help" | "-h"
                 if !rest.is_empty()
-                    && matches!(
-                        rest[0].as_str(),
-                        "prompt"
-                            | "commit"
-                            | "pr"
-                            | "issue"
-                    ) =>
+                    && matches!(rest[0].as_str(), "prompt" | "commit" | "pr" | "issue") =>
             {
                 // `--help` following a subcommand that would otherwise forward
                 // the arg to the API (e.g. `claw prompt --help`) should show
@@ -844,9 +828,13 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     if let Some(action) = parse_local_help_action(&rest) {
         return action;
     }
-    if let Some(action) =
-        parse_single_word_command_alias(&rest, &model, model_flag_raw.as_deref(), permission_mode_override, output_format)
-    {
+    if let Some(action) = parse_single_word_command_alias(
+        &rest,
+        &model,
+        model_flag_raw.as_deref(),
+        permission_mode_override,
+        output_format,
+    ) {
         return action;
     }
 
@@ -1312,7 +1300,6 @@ fn suggest_closest_term<'a>(input: &str, candidates: &'a [&'a str]) -> Option<&'
     ranked_suggestions(input, candidates).into_iter().next()
 }
 
-
 fn suggest_similar_subcommand(input: &str) -> Option<Vec<String>> {
     const KNOWN_SUBCOMMANDS: &[&str] = &[
         "help",
@@ -1342,8 +1329,7 @@ fn suggest_similar_subcommand(input: &str) -> Option<Vec<String>> {
             let prefix_match = common_prefix_len(&normalized_input, &normalized_candidate) >= 4;
             let substring_match = normalized_candidate.contains(&normalized_input)
                 || normalized_input.contains(&normalized_candidate);
-            ((distance <= 2) || prefix_match || substring_match)
-                .then_some((distance, *candidate))
+            ((distance <= 2) || prefix_match || substring_match).then_some((distance, *candidate))
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| left.cmp(right).then_with(|| left.1.cmp(right.1)));
@@ -1362,7 +1348,6 @@ fn common_prefix_len(left: &str, right: &str) -> usize {
         .take_while(|(l, r)| l == r)
         .count()
 }
-
 
 fn looks_like_subcommand_typo(input: &str) -> bool {
     !input.is_empty()
@@ -1441,49 +1426,18 @@ fn resolve_model_alias_with_config(model: &str) -> String {
 }
 
 /// Validate model syntax at parse time.
-/// Accepts: known aliases (opus, sonnet, haiku) or provider/model pattern.
-/// Rejects: empty, whitespace-only, strings with spaces, or invalid chars.
+/// Accepts any non-empty single-token model name. Provider selection is owned
+/// by settings.json `models[].provider`, not by model-name prefixes.
 fn validate_model_syntax(model: &str) -> Result<(), String> {
     let trimmed = model.trim();
     if trimmed.is_empty() {
         return Err("model string cannot be empty".to_string());
     }
-    // Known aliases are always valid
-    match trimmed {
-        "opus" | "sonnet" | "haiku" => return Ok(()),
-        _ => {}
-    }
-    // Check for spaces (malformed)
-    if trimmed.contains(' ') {
+    if trimmed.chars().any(char::is_whitespace) {
         return Err(format!(
-            "invalid model syntax: '{}' contains spaces. Use provider/model format or known alias",
+            "invalid model syntax: '{}' contains whitespace. Use the exact model name from settings.json models[].name",
             trimmed
         ));
-    }
-    // Check provider/model format: provider_id/model_id
-    let parts: Vec<&str> = trimmed.split('/').collect();
-    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-        // #154: hint if the model looks like it belongs to a different provider
-        let mut err_msg = format!(
-            "invalid model syntax: '{}'. Expected provider/model (e.g., anthropic/claude-opus-4-6) or known alias (opus, sonnet, haiku)",
-            trimmed
-        );
-        if trimmed.starts_with("gpt-") || trimmed.starts_with("gpt_") {
-            err_msg.push_str("\nDid you mean `openai/");
-            err_msg.push_str(trimmed);
-            err_msg.push_str("`? (Requires OPENAI_API_KEY env var)");
-        }
-        else if trimmed.starts_with("qwen") {
-            err_msg.push_str("\nDid you mean `qwen/");
-            err_msg.push_str(trimmed);
-            err_msg.push_str("`? (Requires DASHSCOPE_API_KEY env var)");
-        }
-        else if trimmed.starts_with("grok") {
-            err_msg.push_str("\nDid you mean `xai/");
-            err_msg.push_str(trimmed);
-            err_msg.push_str("`? (Requires XAI_API_KEY env var)");
-        }
-        return Err(err_msg);
     }
     Ok(())
 }
@@ -1578,13 +1532,6 @@ fn config_model_for_current_dir() -> Option<String> {
 fn resolve_repl_model(cli_model: String) -> String {
     if cli_model != DEFAULT_MODEL {
         return cli_model;
-    }
-    if let Some(env_model) = env::var("ANTHROPIC_MODEL")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return resolve_model_alias_with_config(&env_model);
     }
     if let Some(config_model) = config_model_for_current_dir() {
         return resolve_model_alias_with_config(&config_model);
@@ -4342,7 +4289,6 @@ impl LiveCli {
         Ok(())
     }
 
-
     fn run_prompt_compact_json(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(false)?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
@@ -5460,7 +5406,13 @@ fn print_status_snapshot(
     match output_format {
         CliOutputFormat::Text => println!(
             "{}",
-            format_status_report(&provenance.resolved, usage, permission_mode.as_str(), &context, Some(&provenance))
+            format_status_report(
+                &provenance.resolved,
+                usage,
+                permission_mode.as_str(),
+                &context,
+                Some(&provenance)
+            )
         ),
         CliOutputFormat::Json => println!(
             "{}",
@@ -7318,6 +7270,10 @@ fn build_runtime_with_plugin_state(
         plugin_registry,
         mcp_state,
     } = runtime_plugin_state;
+    let settings_provider = feature_config.provider_for_model(&model).cloned();
+    let auto_compaction_threshold = feature_config
+        .max_context_for_model(&model)
+        .map(runtime::auto_compaction_threshold_from_max_context);
     plugin_registry.initialize()?;
     let policy = permission_policy(permission_mode, &feature_config, &tool_registry)
         .map_err(std::io::Error::other)?;
@@ -7326,6 +7282,7 @@ fn build_runtime_with_plugin_state(
         AnthropicRuntimeClient::new(
             session_id,
             model,
+            settings_provider,
             enable_tools,
             emit_output,
             allowed_tools.clone(),
@@ -7342,6 +7299,9 @@ fn build_runtime_with_plugin_state(
         system_prompt,
         &feature_config,
     );
+    if let Some(threshold) = auto_compaction_threshold {
+        runtime = runtime.with_auto_compaction_input_tokens_threshold(threshold);
+    }
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
     }
@@ -7453,6 +7413,7 @@ impl AnthropicRuntimeClient {
     fn new(
         session_id: &str,
         model: String,
+        settings_provider: Option<ModelProviderConfig>,
         enable_tools: bool,
         emit_output: bool,
         allowed_tools: Option<AllowedToolSet>,
@@ -7479,26 +7440,39 @@ impl AnthropicRuntimeClient {
         // prompt cache is Anthropic-only so non-Anthropic variants
         // skip it.
         let resolved_model = api::resolve_model_alias(&model);
-        let client = match detect_provider_kind(&resolved_model) {
-            ProviderKind::Anthropic => {
-                let auth = resolve_cli_auth_source()?;
-                let inner = AnthropicClient::from_auth(auth)
-                    .with_base_url(api::read_base_url())
-                    .with_prompt_cache(PromptCache::new(session_id));
-                ApiProviderClient::Anthropic(inner)
+        let client = if let Some(provider) = settings_provider {
+            let client = ApiProviderClient::from_settings_provider(
+                provider.provider_type(),
+                provider.url(),
+                provider.api_key(),
+            )?;
+            match client {
+                ApiProviderClient::Anthropic(inner) => ApiProviderClient::Anthropic(
+                    inner.with_prompt_cache(PromptCache::new(session_id)),
+                ),
+                other => other,
             }
-            ProviderKind::Xai | ProviderKind::OpenAi => {
-                // The api crate's `ProviderClient::from_model_with_anthropic_auth`
-                // with `None` for the anthropic auth routes via
-                // `detect_provider_kind` and builds an
-                // `OpenAiCompatClient::from_env` with the matching
-                // `OpenAiCompatConfig` (openai / xai / dashscope).
-                // That reads the correct API-key env var and BASE_URL
-                // override internally, so this one call covers OpenAI,
-                // OpenRouter, xAI, DashScope, Ollama, and any other
-                // OpenAI-compat endpoint users configure via
-                // `OPENAI_BASE_URL` / `XAI_BASE_URL` / `DASHSCOPE_BASE_URL`.
-                ApiProviderClient::from_model_with_anthropic_auth(&resolved_model, None)?
+        } else {
+            match detect_provider_kind(&resolved_model) {
+                ProviderKind::Anthropic => {
+                    let auth = resolve_cli_auth_source()?;
+                    let inner = AnthropicClient::from_auth(auth)
+                        .with_base_url(api::read_base_url())
+                        .with_prompt_cache(PromptCache::new(session_id));
+                    ApiProviderClient::Anthropic(inner)
+                }
+                ProviderKind::Xai | ProviderKind::OpenAi => {
+                    // The api crate's `ProviderClient::from_model_with_anthropic_auth`
+                    // with `None` for the anthropic auth routes via
+                    // `detect_provider_kind` and builds an
+                    // `OpenAiCompatClient::from_env` with the matching
+                    // `OpenAiCompatConfig` (openai / xai / dashscope).
+                    // That reads the correct API-key env var and BASE_URL
+                    // override internally, so this legacy path covers OpenAI,
+                    // OpenRouter, xAI, DashScope, Ollama, and any other
+                    // OpenAI-compat endpoint users configure via env vars.
+                    ApiProviderClient::from_model_with_anthropic_auth(&resolved_model, None)?
+                }
             }
         };
         Ok(Self {
@@ -9026,26 +9000,24 @@ fn print_help(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::
 mod tests {
     use super::{
         build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        collect_session_prompt_history, create_managed_session_handle, describe_tool_progress,
-        filter_tool_specs, format_bughunter_report, format_commit_preflight_report,
-        format_commit_skipped_report, format_compact_report, format_connected_line,
-        format_cost_report, format_history_timestamp, format_internal_prompt_progress_line,
-        format_issue_report, format_model_report, format_model_switch_report,
-        format_permissions_report, format_permissions_switch_report, format_pr_report,
-        format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
-        format_ultraplan_report, format_unknown_slash_command,
+        classify_error_kind, collect_session_prompt_history, create_managed_session_handle,
+        describe_tool_progress, filter_tool_specs, format_bughunter_report,
+        format_commit_preflight_report, format_commit_skipped_report, format_compact_report,
+        format_connected_line, format_cost_report, format_history_timestamp,
+        format_internal_prompt_progress_line, format_issue_report, format_model_report,
+        format_model_switch_report, format_permissions_report, format_permissions_switch_report,
+        format_pr_report, format_resume_report, format_status_report, format_tool_call_start,
+        format_tool_result, format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, format_user_visible_api_error,
-        classify_error_kind,
         merge_prompt_with_stdin, normalize_permission_mode, parse_args, parse_export_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
         parse_history_count, permission_policy, print_help_to, push_output_block,
-        render_config_report, render_diff_report, render_diff_report_for, render_memory_report,
-        split_error_hint,
-        render_help_topic, render_prompt_history_report, render_repl_help, render_resume_usage,
+        render_config_report, render_diff_report, render_diff_report_for, render_help_topic,
+        render_memory_report, render_prompt_history_report, render_repl_help, render_resume_usage,
         render_session_markdown, resolve_model_alias, resolve_model_alias_with_config,
         resolve_repl_model, resolve_session_reference, response_to_events,
         resume_supported_slash_commands, run_resume_command, short_tool_id,
-        slash_command_completion_candidates_with_sessions, status_context,
+        slash_command_completion_candidates_with_sessions, split_error_hint, status_context,
         summarize_tool_payload_for_markdown, try_resolve_bare_skill_prompt, validate_no_args,
         write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
         InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, LocalHelpTopic,
@@ -10026,8 +9998,8 @@ mod tests {
         // with a specific error instead of falling through to the prompt
         // path (where they surface a misleading "missing Anthropic
         // credentials" error or burn API tokens on an empty prompt).
-        let empty_err = parse_args(&["".to_string()])
-            .expect_err("empty positional arg should be rejected");
+        let empty_err =
+            parse_args(&["".to_string()]).expect_err("empty positional arg should be rejected");
         assert!(
             empty_err.starts_with("empty prompt:"),
             "empty-arg error should be specific, got: {empty_err}"
@@ -10244,7 +10216,8 @@ mod tests {
         .expect("write malformed .claw.json");
 
         let context = with_current_dir(&cwd, || {
-            super::status_context(None).expect("status_context should not hard-fail on config parse errors (#143)")
+            super::status_context(None)
+                .expect("status_context should not hard-fail on config parse errors (#143)")
         });
 
         // Phase 1 contract: config_load_error is populated with the parse error.
@@ -10281,7 +10254,8 @@ mod tests {
             cumulative: runtime::TokenUsage::default(),
             estimated_tokens: 0,
         };
-        let json = super::status_json_value(Some("test-model"), usage, "workspace-write", &context, None);
+        let json =
+            super::status_json_value(Some("test-model"), usage, "workspace-write", &context, None);
         assert_eq!(
             json.get("status").and_then(|v| v.as_str()),
             Some("degraded"),
@@ -10298,8 +10272,14 @@ mod tests {
             json.get("model").and_then(|v| v.as_str()),
             Some("test-model")
         );
-        assert!(json.get("workspace").is_some(), "workspace field still reported");
-        assert!(json.get("sandbox").is_some(), "sandbox field still reported");
+        assert!(
+            json.get("workspace").is_some(),
+            "workspace field still reported"
+        );
+        assert!(
+            json.get("sandbox").is_some(),
+            "sandbox field still reported"
+        );
 
         // Clean path: no config error → status: "ok", config_load_error: null.
         let clean_cwd = root.join("project-with-clean-config");
@@ -10308,8 +10288,13 @@ mod tests {
             super::status_context(None).expect("clean status_context should succeed")
         });
         assert!(clean_context.config_load_error.is_none());
-        let clean_json =
-            super::status_json_value(Some("test-model"), usage, "workspace-write", &clean_context, None);
+        let clean_json = super::status_json_value(
+            Some("test-model"),
+            usage,
+            "workspace-write",
+            &clean_context,
+            None,
+        );
         assert_eq!(
             clean_json.get("status").and_then(|v| v.as_str()),
             Some("ok"),
@@ -10408,50 +10393,73 @@ mod tests {
         // Other unrecognized args should NOT trigger the --json hint.
         let err_other = parse_args(&["doctor".to_string(), "garbage".to_string()])
             .expect_err("`doctor garbage` should fail without --json hint");
-        assert!(!err_other.contains("--output-format json"),
-            "unrelated args should not trigger --json hint: {err_other}");
-        // #154: model syntax error should hint at provider prefix when applicable
-        let err_gpt = parse_args(&["prompt".to_string(), "test".to_string(), "--model".to_string(), "gpt-4".to_string()])
-            .expect_err("`--model gpt-4` should fail with OpenAI hint");
         assert!(
-            err_gpt.contains("Did you mean `openai/gpt-4`?"),
-            "GPT model error should hint openai/ prefix: {err_gpt}"
+            !err_other.contains("--output-format json"),
+            "unrelated args should not trigger --json hint: {err_other}"
         );
+        let parsed = parse_args(&[
+            "prompt".to_string(),
+            "test".to_string(),
+            "--model".to_string(),
+            "qwen-plus".to_string(),
+        ])
+        .expect("bare model names should be accepted");
+        match parsed {
+            CliAction::Prompt { model, .. } => assert_eq!(model, "qwen-plus"),
+            other => panic!("expected prompt action, got {other:?}"),
+        }
+        let err_whitespace = parse_args(&[
+            "prompt".to_string(),
+            "test".to_string(),
+            "--model".to_string(),
+            "bad model".to_string(),
+        ])
+        .expect_err("model names with whitespace should fail");
         assert!(
-            err_gpt.contains("OPENAI_API_KEY"),
-            "GPT model error should mention env var: {err_gpt}"
-        );
-        let err_qwen = parse_args(&["prompt".to_string(), "test".to_string(), "--model".to_string(), "qwen-plus".to_string()])
-            .expect_err("`--model qwen-plus` should fail with DashScope hint");
-        assert!(
-            err_qwen.contains("Did you mean `qwen/qwen-plus`?"),
-            "Qwen model error should hint qwen/ prefix: {err_qwen}"
-        );
-        assert!(
-            err_qwen.contains("DASHSCOPE_API_KEY"),
-            "Qwen model error should mention env var: {err_qwen}"
-        );
-        // Unrelated invalid model should NOT get a hint
-        let err_garbage = parse_args(&["prompt".to_string(), "test".to_string(), "--model".to_string(), "asdfgh".to_string()])
-            .expect_err("`--model asdfgh` should fail");
-        assert!(
-            !err_garbage.contains("Did you mean"),
-            "Unrelated model errors should not get a hint: {err_garbage}"
+            err_whitespace.contains("contains whitespace"),
+            "whitespace model error should explain the syntax: {err_whitespace}"
         );
     }
 
     #[test]
     fn classify_error_kind_returns_correct_discriminants() {
         // #77: error kind classification for JSON error payloads
-        assert_eq!(classify_error_kind("missing Anthropic credentials; export ..."), "missing_credentials");
-        assert_eq!(classify_error_kind("no worker state file found at /tmp/..."), "missing_worker_state");
-        assert_eq!(classify_error_kind("session not found: abc123"), "session_not_found");
-        assert_eq!(classify_error_kind("failed to restore session: no managed sessions found"), "session_load_failed");
-        assert_eq!(classify_error_kind("unrecognized argument `--foo` for subcommand `doctor`"), "cli_parse");
-        assert_eq!(classify_error_kind("invalid model syntax: 'gpt-4'. Expected ..."), "invalid_model_syntax");
-        assert_eq!(classify_error_kind("unsupported resumed command: /blargh"), "unsupported_resumed_command");
-        assert_eq!(classify_error_kind("api failed after 3 attempts: ..."), "api_http_error");
-        assert_eq!(classify_error_kind("something completely unknown"), "unknown");
+        assert_eq!(
+            classify_error_kind("missing Anthropic credentials; export ..."),
+            "missing_credentials"
+        );
+        assert_eq!(
+            classify_error_kind("no worker state file found at /tmp/..."),
+            "missing_worker_state"
+        );
+        assert_eq!(
+            classify_error_kind("session not found: abc123"),
+            "session_not_found"
+        );
+        assert_eq!(
+            classify_error_kind("failed to restore session: no managed sessions found"),
+            "session_load_failed"
+        );
+        assert_eq!(
+            classify_error_kind("unrecognized argument `--foo` for subcommand `doctor`"),
+            "cli_parse"
+        );
+        assert_eq!(
+            classify_error_kind("invalid model syntax: 'gpt-4'. Expected ..."),
+            "invalid_model_syntax"
+        );
+        assert_eq!(
+            classify_error_kind("unsupported resumed command: /blargh"),
+            "unsupported_resumed_command"
+        );
+        assert_eq!(
+            classify_error_kind("api failed after 3 attempts: ..."),
+            "api_http_error"
+        );
+        assert_eq!(
+            classify_error_kind("something completely unknown"),
+            "unknown"
+        );
     }
 
     #[test]
@@ -10922,7 +10930,6 @@ mod tests {
         assert!(report.contains("Use /help"));
     }
 
-
     #[test]
     fn typoed_doctor_subcommand_returns_did_you_mean_error() {
         let error = parse_args(&["doctorr".to_string()]).expect_err("doctorr should error");
@@ -11004,7 +11011,6 @@ mod tests {
             }
         );
     }
-
 
     #[test]
     fn punctuation_bearing_single_token_still_dispatches_to_prompt() {
@@ -11338,19 +11344,18 @@ mod tests {
     }
 
     #[test]
-    fn resolve_repl_model_falls_back_to_anthropic_model_env_when_default() {
+    fn resolve_repl_model_ignores_anthropic_model_env_when_default() {
         let _guard = env_lock();
         let root = temp_dir();
         fs::create_dir_all(&root).expect("root dir");
         let config_home = root.join("config");
         fs::create_dir_all(&config_home).expect("config home dir");
         std::env::set_var("CLAW_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_MODEL");
         std::env::set_var("ANTHROPIC_MODEL", "sonnet");
 
         let resolved = with_current_dir(&root, || resolve_repl_model(DEFAULT_MODEL.to_string()));
 
-        assert_eq!(resolved, "claude-sonnet-4-6");
+        assert_eq!(resolved, DEFAULT_MODEL);
 
         std::env::remove_var("ANTHROPIC_MODEL");
         std::env::remove_var("CLAW_CONFIG_HOME");

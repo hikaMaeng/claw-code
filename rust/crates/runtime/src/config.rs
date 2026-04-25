@@ -51,13 +51,30 @@ pub struct RuntimePluginConfig {
     max_output_tokens: Option<u32>,
 }
 
-
 /// Web search provider settings from settings.json `websearch` section.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WebSearchConfig {
     pub provider: Option<String>,
     pub api_key: Option<String>,
 }
+
+/// Provider endpoint settings from settings.json `providers` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelProviderConfig {
+    name: String,
+    provider_type: String,
+    url: String,
+    api_key: Option<String>,
+}
+
+/// Model registry entry from settings.json `models` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelRegistryEntry {
+    name: String,
+    provider: String,
+    max_context: u32,
+}
+
 /// Structured feature configuration consumed by runtime subsystems.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeFeatureConfig {
@@ -66,6 +83,8 @@ pub struct RuntimeFeatureConfig {
     mcp: McpConfigCollection,
     oauth: Option<OAuthConfig>,
     model: Option<String>,
+    providers: BTreeMap<String, ModelProviderConfig>,
+    models: Vec<ModelRegistryEntry>,
     aliases: BTreeMap<String, String>,
     permission_mode: Option<ResolvedPermissionMode>,
     permission_rules: RuntimePermissionRuleConfig,
@@ -317,6 +336,8 @@ impl ConfigLoader {
             },
             oauth: parse_optional_oauth_config(&merged_value, "merged settings.oauth")?,
             model: parse_optional_model(&merged_value),
+            providers: parse_optional_model_providers(&merged_value)?,
+            models: parse_optional_model_registry(&merged_value)?,
             aliases: parse_optional_aliases(&merged_value)?,
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             permission_rules: parse_optional_permission_rules(&merged_value)?,
@@ -395,6 +416,16 @@ impl RuntimeConfig {
     }
 
     #[must_use]
+    pub fn providers(&self) -> &BTreeMap<String, ModelProviderConfig> {
+        &self.feature_config.providers
+    }
+
+    #[must_use]
+    pub fn models(&self) -> &[ModelRegistryEntry] {
+        &self.feature_config.models
+    }
+
+    #[must_use]
     pub fn aliases(&self) -> &BTreeMap<String, String> {
         &self.feature_config.aliases
     }
@@ -468,6 +499,33 @@ impl RuntimeFeatureConfig {
     }
 
     #[must_use]
+    pub fn providers(&self) -> &BTreeMap<String, ModelProviderConfig> {
+        &self.providers
+    }
+
+    #[must_use]
+    pub fn models(&self) -> &[ModelRegistryEntry] {
+        &self.models
+    }
+
+    #[must_use]
+    pub fn model_entry(&self, model_name: &str) -> Option<&ModelRegistryEntry> {
+        self.models.iter().find(|entry| entry.name == model_name)
+    }
+
+    #[must_use]
+    pub fn provider_for_model(&self, model_name: &str) -> Option<&ModelProviderConfig> {
+        let entry = self.model_entry(model_name)?;
+        self.providers.get(entry.provider())
+    }
+
+    #[must_use]
+    pub fn max_context_for_model(&self, model_name: &str) -> Option<u32> {
+        self.model_entry(model_name)
+            .map(ModelRegistryEntry::max_context)
+    }
+
+    #[must_use]
     pub fn aliases(&self) -> &BTreeMap<String, String> {
         &self.aliases
     }
@@ -517,6 +575,69 @@ impl ProviderFallbackConfig {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.fallbacks.is_empty()
+    }
+}
+
+impl ModelProviderConfig {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        provider_type: impl Into<String>,
+        url: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            provider_type: provider_type.into(),
+            url: url.into(),
+            api_key,
+        }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn provider_type(&self) -> &str {
+        &self.provider_type
+    }
+
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    #[must_use]
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
+    }
+}
+
+impl ModelRegistryEntry {
+    #[must_use]
+    pub fn new(name: impl Into<String>, provider: impl Into<String>, max_context: u32) -> Self {
+        Self {
+            name: name.into(),
+            provider: provider.into(),
+            max_context,
+        }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    #[must_use]
+    pub fn max_context(&self) -> u32 {
+        self.max_context
     }
 }
 
@@ -751,6 +872,70 @@ fn parse_optional_model(root: &JsonValue) -> Option<String> {
         .and_then(|object| object.get("model"))
         .and_then(JsonValue::as_str)
         .map(ToOwned::to_owned)
+}
+
+fn parse_optional_model_providers(
+    root: &JsonValue,
+) -> Result<BTreeMap<String, ModelProviderConfig>, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(providers_value) = object.get("providers") else {
+        return Ok(BTreeMap::new());
+    };
+    let providers = expect_object(providers_value, "merged settings.providers")?;
+    providers
+        .iter()
+        .map(|(name, value)| {
+            let context = format!("merged settings.providers.{name}");
+            let provider = expect_object(value, &context)?;
+            let provider_type = expect_string(provider, "type", &context)?.to_string();
+            let url = expect_string(provider, "url", &context)?.to_string();
+            let api_key = optional_string(provider, "apiKey", &context)?.map(str::to_string);
+            Ok((
+                name.clone(),
+                ModelProviderConfig::new(name.clone(), provider_type, url, api_key),
+            ))
+        })
+        .collect()
+}
+
+fn parse_optional_model_registry(root: &JsonValue) -> Result<Vec<ModelRegistryEntry>, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(Vec::new());
+    };
+    let Some(models_value) = object.get("models") else {
+        return Ok(Vec::new());
+    };
+    let Some(models) = models_value.as_array() else {
+        return Err(ConfigError::Parse(
+            "merged settings.models: expected JSON array".to_string(),
+        ));
+    };
+    models
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let context = format!("merged settings.models[{index}]");
+            let model = expect_object(value, &context)?;
+            let name = expect_string(model, "name", &context)?.to_string();
+            let provider = expect_string(model, "provider", &context)?.to_string();
+            let max_context = match optional_u32(model, "maxContext", &context)? {
+                Some(value) => value,
+                None => optional_u32(model, "maxcontext", &context)?.ok_or_else(|| {
+                    ConfigError::Parse(format!(
+                        "{context}: missing non-negative integer field maxContext"
+                    ))
+                })?,
+            };
+            if max_context == 0 {
+                return Err(ConfigError::Parse(format!(
+                    "{context}: field maxContext must be greater than zero"
+                )));
+            }
+            Ok(ModelRegistryEntry::new(name, provider, max_context))
+        })
+        .collect()
 }
 
 fn parse_optional_aliases(root: &JsonValue) -> Result<BTreeMap<String, String>, ConfigError> {
@@ -1262,8 +1447,14 @@ fn parse_optional_web_search_config(root: &JsonValue) -> WebSearchConfig {
         return WebSearchConfig::default();
     };
     WebSearchConfig {
-        provider: ws.get("provider").and_then(JsonValue::as_str).map(ToOwned::to_owned),
-        api_key: ws.get("apiKey").and_then(JsonValue::as_str).map(ToOwned::to_owned),
+        provider: ws
+            .get("provider")
+            .and_then(JsonValue::as_str)
+            .map(ToOwned::to_owned),
+        api_key: ws
+            .get("apiKey")
+            .and_then(JsonValue::as_str)
+            .map(ToOwned::to_owned),
     }
 }
 
@@ -1498,6 +1689,55 @@ mod tests {
         assert_eq!(chain.primary(), None);
         assert!(chain.fallbacks().is_empty());
         assert!(chain.is_empty());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_model_provider_registry_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "model": "qwen3.6-35b-a3b:tr",
+              "providers": {
+                "local": {
+                  "type": "openai",
+                  "url": "http://192.168.0.6:12345/v1"
+                }
+              },
+              "models": [
+                {
+                  "name": "qwen3.6-35b-a3b:tr",
+                  "provider": "local",
+                  "maxContext": 262000
+                }
+              ]
+            }"#,
+        )
+        .expect("write model registry settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        let provider = loaded
+            .feature_config()
+            .provider_for_model("qwen3.6-35b-a3b:tr")
+            .expect("provider should resolve");
+        assert_eq!(provider.name(), "local");
+        assert_eq!(provider.provider_type(), "openai");
+        assert_eq!(provider.url(), "http://192.168.0.6:12345/v1");
+        assert_eq!(
+            loaded
+                .feature_config()
+                .max_context_for_model("qwen3.6-35b-a3b:tr"),
+            Some(262_000)
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

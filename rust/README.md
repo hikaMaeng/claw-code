@@ -26,19 +26,28 @@ cargo run -p rusty-claude-cli -- --output-format json prompt "summarize src/main
 
 ## Configuration
 
-Set your API credentials:
+Model routing is settings-backed. Put provider endpoints in `providers`, then map exact model names to those providers in `models`.
 
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-# Or use a proxy
-export ANTHROPIC_BASE_URL="https://your-proxy.com"
+```json
+{
+  "model": "qwen3.6-35b-a3b:tr",
+  "providers": {
+    "local-lmstudio": {
+      "type": "openai",
+      "url": "http://192.168.0.6:12345/v1"
+    }
+  },
+  "models": [
+    {
+      "name": "qwen3.6-35b-a3b:tr",
+      "provider": "local-lmstudio",
+      "maxContext": 262000
+    }
+  ]
+}
 ```
 
-Or provide an OAuth bearer token directly:
-
-```bash
-export ANTHROPIC_AUTH_TOKEN="anthropic-oauth-or-proxy-bearer-token"
-```
+Supported provider `type` values are `anthropic`, `xai`, `openai`, and `dashscope`. Hosted providers may also set `apiKey` inside the provider object. `maxContext` is required because automatic compaction derives its trigger from the selected model's context window.
 
 ## Mock parity harness
 
@@ -79,8 +88,8 @@ Primary artifacts:
 
 | Feature | Status |
 |---------|--------|
-| Anthropic / OpenAI-compatible provider flows + streaming | ✅ |
-| Direct bearer-token auth via `ANTHROPIC_AUTH_TOKEN` | ✅ |
+| Settings-backed Anthropic / OpenAI-compatible provider flows + streaming | ✅ |
+| Provider registry with model `maxContext` windows | ✅ |
 | Interactive REPL (rustyline) | ✅ |
 | Tool system (bash, read, write, edit, grep, glob) | ✅ |
 | Web tools (search, fetch) | ✅ |
@@ -95,7 +104,7 @@ Primary artifacts:
 | Cost / usage / stats surfaces | ✅ |
 | Git integration | ✅ |
 | Markdown terminal rendering (ANSI) | ✅ |
-| Model aliases (opus/sonnet/haiku) | ✅ |
+| Exact model names from settings.json | ✅ |
 | Direct CLI subcommands (`status`, `sandbox`, `agents`, `mcp`, `skills`, `doctor`) | ✅ |
 | Slash commands (including `/skills`, `/agents`, `/mcp`, `/doctor`, `/plugin`, `/subagent`) | ✅ |
 | Hooks (`/hooks`, config-backed lifecycle hooks) | ✅ |
@@ -103,15 +112,9 @@ Primary artifacts:
 | Skills inventory / install surfaces | ✅ |
 | Machine-readable JSON output across core CLI surfaces | ✅ |
 
-## Model Aliases
+## Model Registry
 
-Short names resolve to the latest model versions:
-
-| Alias | Resolves To |
-|-------|------------|
-| `opus` | `claude-opus-4-6` |
-| `sonnet` | `claude-sonnet-4-6` |
-| `haiku` | `claude-haiku-4-5-20251213` |
+Use exact model names in `models[].name`. The CLI accepts bare names such as `qwen-plus` or `qwen3.6-35b-a3b:tr`; provider selection comes from `models[].provider`, not from model-name prefixes.
 
 ## CLI Flags and Commands
 

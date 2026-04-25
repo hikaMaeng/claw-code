@@ -9,7 +9,7 @@ This document describes model-specific handling in the OpenAI-compatible provide
   - [Kimi Models (is_error Exclusion)](#kimi-models-is_error-exclusion)
   - [Reasoning Models (Tuning Parameter Stripping)](#reasoning-models-tuning-parameter-stripping)
   - [GPT-5 (max_completion_tokens)](#gpt-5-max_completion_tokens)
-  - [Qwen Models (DashScope Routing)](#qwen-models-dashscope-routing)
+  - [Qwen Models](#qwen-models)
 - [Implementation Details](#implementation-details)
 - [Adding New Models](#adding-new-models)
 - [Testing](#testing)
@@ -21,7 +21,7 @@ The `openai_compat.rs` provider translates Claude Code's internal message format
 - Tool result message fields (`is_error`)
 - Sampling parameters (temperature, top_p, etc.)
 - Token limit fields (`max_tokens` vs `max_completion_tokens`)
-- Base URL routing
+- Settings-backed provider routing
 
 ## Model-Specific Handling
 
@@ -120,20 +120,35 @@ let max_tokens_key = if wire_model.starts_with("gpt-5") {
 
 ---
 
-### Qwen Models (DashScope Routing)
+### Qwen Models
 
 **Affected models:** All models with `qwen` prefix
 
-**Behavior:** Routed to DashScope (`https://dashscope.aliyuncs.com/compatible-mode/v1`) rather than default providers.
+**Behavior:** Qwen model compatibility is handled by the OpenAI-compatible request translator. Routing is not inferred from the `qwen` prefix; settings.json chooses the provider through `models[].provider`.
 
-**Rationale:** Qwen models are hosted by Alibaba Cloud's DashScope service, not OpenAI or Anthropic.
+**Rationale:** Qwen models may run on DashScope, OpenRouter, LM Studio, vLLM, Ollama-compatible gateways, or another OpenAI-compatible endpoint. The model name should stay the provider's real model name.
 
 **Configuration:**
-```rust
-pub const DEFAULT_DASHSCOPE_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+```json
+{
+  "providers": {
+    "dashscope": {
+      "type": "dashscope",
+      "url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "apiKey": "sk-..."
+    }
+  },
+  "models": [
+    {
+      "name": "qwen-plus",
+      "provider": "dashscope",
+      "maxContext": 131072
+    }
+  ]
+}
 ```
 
-**Authentication:** Uses `DASHSCOPE_API_KEY` environment variable.
+**Authentication:** Hosted providers use `providers.<name>.apiKey`. Local OpenAI-compatible providers may omit `apiKey`.
 
 **Note:** Some Qwen models are also reasoning models (see [Reasoning Models](#reasoning-models-tuning-parameter-stripping) above) and receive both treatments.
 
@@ -154,18 +169,31 @@ rust/crates/api/src/providers/openai_compat.rs
 | `translate_message()` | Converts internal messages to OpenAI format (applies `is_error` logic) |
 | `build_chat_completion_request()` | Constructs full request payload (applies all model-specific logic) |
 
-### Provider Prefix Handling
+### Provider Routing
 
-All model detection functions strip provider prefixes (e.g., `dashscope/kimi-k2.5` → `kimi-k2.5`) before matching:
+Provider routing is controlled by settings.json:
 
-```rust
-let canonical = model.to_ascii_lowercase()
-    .rsplit('/')
-    .next()
-    .unwrap_or(model);
+```json
+{
+  "model": "kimi-k2.5",
+  "providers": {
+    "moonshot": {
+      "type": "openai",
+      "url": "https://api.moonshot.example/v1",
+      "apiKey": "sk-..."
+    }
+  },
+  "models": [
+    {
+      "name": "kimi-k2.5",
+      "provider": "moonshot",
+      "maxContext": 256000
+    }
+  ]
+}
 ```
 
-This ensures consistent detection regardless of whether models are referenced with or without provider prefixes.
+Compatibility detection still canonicalizes slash-delimited names for legacy callers, but new settings should use the real provider model name without routing prefixes.
 
 ## Adding New Models
 

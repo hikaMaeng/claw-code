@@ -16,7 +16,8 @@ use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
 
 const DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD: u32 = 100_000;
-const AUTO_COMPACTION_THRESHOLD_ENV_VAR: &str = "CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS";
+const AUTO_COMPACTION_BUFFER_PERCENT: u32 = 165;
+const AUTO_COMPACTION_BUFFER_DENOMINATOR: u32 = 1000;
 
 /// Fully assembled request payload sent to the upstream model client.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,7 +182,7 @@ where
             max_iterations: usize::MAX,
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(feature_config),
-            auto_compaction_input_tokens_threshold: auto_compaction_threshold_from_env(),
+            auto_compaction_input_tokens_threshold: DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
             hook_abort_signal: HookAbortSignal::default(),
             hook_progress_reporter: None,
             session_tracer: None,
@@ -685,22 +686,17 @@ where
     }
 }
 
-/// Reads the automatic compaction threshold from the environment.
+/// Calculates the automatic compaction threshold from a model context window.
 #[must_use]
-pub fn auto_compaction_threshold_from_env() -> u32 {
-    parse_auto_compaction_threshold(
-        std::env::var(AUTO_COMPACTION_THRESHOLD_ENV_VAR)
-            .ok()
-            .as_deref(),
-    )
-}
-
-#[must_use]
-fn parse_auto_compaction_threshold(value: Option<&str>) -> u32 {
-    value
-        .and_then(|raw| raw.trim().parse::<u32>().ok())
-        .filter(|threshold| *threshold > 0)
-        .unwrap_or(DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD)
+pub fn auto_compaction_threshold_from_max_context(max_context: u32) -> u32 {
+    if max_context == 0 {
+        return DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD;
+    }
+    let buffer = max_context.saturating_mul(AUTO_COMPACTION_BUFFER_PERCENT)
+        / AUTO_COMPACTION_BUFFER_DENOMINATOR;
+    max_context
+        .saturating_sub(buffer)
+        .max(DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD.min(max_context))
 }
 
 fn build_assistant_message(
@@ -822,7 +818,7 @@ impl ToolExecutor for StaticToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_assistant_message, parse_auto_compaction_threshold, ApiClient, ApiRequest,
+        auto_compaction_threshold_from_max_context, build_assistant_message, ApiClient, ApiRequest,
         AssistantEvent, AutoCompactionEvent, ConversationRuntime, PromptCacheEvent, RuntimeError,
         StaticToolExecutor, ToolExecutor, DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
     };
@@ -1595,18 +1591,11 @@ mod tests {
     }
 
     #[test]
-    fn auto_compaction_threshold_defaults_and_parses_values() {
+    fn auto_compaction_threshold_uses_context_window_buffer() {
+        assert_eq!(auto_compaction_threshold_from_max_context(200_000), 167_000);
+        assert_eq!(auto_compaction_threshold_from_max_context(262_000), 218_770);
         assert_eq!(
-            parse_auto_compaction_threshold(None),
-            DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD
-        );
-        assert_eq!(parse_auto_compaction_threshold(Some("4321")), 4321);
-        assert_eq!(
-            parse_auto_compaction_threshold(Some("0")),
-            DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD
-        );
-        assert_eq!(
-            parse_auto_compaction_threshold(Some("not-a-number")),
+            auto_compaction_threshold_from_max_context(0),
             DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD
         );
     }
