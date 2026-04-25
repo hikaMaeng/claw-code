@@ -51,6 +51,13 @@ pub struct RuntimePluginConfig {
     max_output_tokens: Option<u32>,
 }
 
+
+/// Web search provider settings from settings.json `websearch` section.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WebSearchConfig {
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+}
 /// Structured feature configuration consumed by runtime subsystems.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeFeatureConfig {
@@ -65,6 +72,7 @@ pub struct RuntimeFeatureConfig {
     sandbox: SandboxConfig,
     provider_fallbacks: ProviderFallbackConfig,
     trusted_roots: Vec<String>,
+    web_search: WebSearchConfig,
 }
 
 /// Ordered chain of fallback model identifiers used when the primary
@@ -315,6 +323,7 @@ impl ConfigLoader {
             sandbox: parse_optional_sandbox_config(&merged_value)?,
             provider_fallbacks: parse_optional_provider_fallbacks(&merged_value)?,
             trusted_roots: parse_optional_trusted_roots(&merged_value)?,
+            web_search: parse_optional_web_search_config(&merged_value),
         };
 
         Ok(RuntimeConfig {
@@ -413,6 +422,10 @@ impl RuntimeConfig {
     #[must_use]
     pub fn trusted_roots(&self) -> &[String] {
         &self.feature_config.trusted_roots
+    }
+
+    pub fn web_search(&self) -> &WebSearchConfig {
+        &self.feature_config.web_search
     }
 }
 
@@ -1238,6 +1251,19 @@ fn extend_unique(target: &mut Vec<String>, values: &[String]) {
 fn push_unique(target: &mut Vec<String>, value: String) {
     if !target.iter().any(|existing| existing == &value) {
         target.push(value);
+    }
+}
+
+fn parse_optional_web_search_config(root: &JsonValue) -> WebSearchConfig {
+    let Some(obj) = root.as_object() else {
+        return WebSearchConfig::default();
+    };
+    let Some(ws) = obj.get("websearch").and_then(JsonValue::as_object) else {
+        return WebSearchConfig::default();
+    };
+    WebSearchConfig {
+        provider: ws.get("provider").and_then(JsonValue::as_str).map(ToOwned::to_owned),
+        api_key: ws.get("apiKey").and_then(JsonValue::as_str).map(ToOwned::to_owned),
     }
 }
 
