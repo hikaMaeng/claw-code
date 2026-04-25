@@ -4184,6 +4184,24 @@ impl LiveCli {
             || "unknown".to_string(),
             |context| context.git_summary.headline(),
         );
+        let websearch_label = {
+            use runtime::ConfigLoader;
+            let cwd_path = std::path::Path::new(&cwd);
+            ConfigLoader::default_for(cwd_path)
+                .load()
+                .ok()
+                .map(|cfg| {
+                    let ws = cfg.web_search();
+                    let provider = ws.provider.as_deref().unwrap_or("ddg");
+                    let has_key = ws.api_key.as_deref().map_or(false, |k| !k.is_empty());
+                    match provider {
+                        "ddg" => "ddg  [2m(default)[0m".to_string(),
+                        p if !has_key => format!("{p}  [33m⚠ apiKey 없음[0m"),
+                        p => format!("{p}  [32m✓[0m"),
+                    }
+                })
+                .unwrap_or_else(|| "ddg  [2m(default)[0m".to_string())
+        };
         let session_path = self.session.path.strip_prefix(Path::new(&cwd)).map_or_else(
             |_| self.session.path.display().to_string(),
             |path| path.display().to_string(),
@@ -4198,6 +4216,7 @@ impl LiveCli {
  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\x1b[0m \x1b[38;5;208mCode\x1b[0m 🦞\n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
+  \x1b[2mWebSearch\x1b[0m        {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
   \x1b[2mWorkspace\x1b[0m        {}\n\
   \x1b[2mDirectory\x1b[0m        {}\n\
@@ -4206,6 +4225,7 @@ impl LiveCli {
   Type \x1b[1m/help\x1b[0m for commands · \x1b[1m/status\x1b[0m for live context · \x1b[2m/resume latest\x1b[0m jumps back to the newest session · \x1b[1m/diff\x1b[0m then \x1b[1m/commit\x1b[0m to ship · \x1b[2mTab\x1b[0m for workflow completions · \x1b[2mShift+Enter\x1b[0m for newline",
             self.model,
             self.permission_mode.as_str(),
+            websearch_label,
             git_branch,
             workspace,
             cwd,
