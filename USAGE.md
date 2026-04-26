@@ -237,6 +237,8 @@ Supported provider `type` values:
 
 `apiKey` is optional for local OpenAI-compatible providers and required for hosted providers that enforce authentication.
 
+When `--model` is omitted, both interactive `claw` and non-interactive prompt modes (`claw prompt ...`, `claw -p ...`, shorthand prompts, and piped prompts) use the merged settings `model`. A project `.claw/settings.json` value overrides the global `$CLAW_CONFIG_HOME/settings.json` value. An explicit `--model` flag always wins over settings.
+
 Automatic compaction uses `models[].maxContext`. The trigger is calculated at roughly 83.5% of the context window, leaving a 16.5% buffer for system tools, MCP tools, deferred tool definitions, and the next turn. For a 200k context model this triggers near 167k input tokens and keeps about 33k tokens as buffer.
 
 ## FAQ

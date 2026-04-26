@@ -725,7 +725,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 }
                 return Ok(CliAction::Prompt {
                     prompt,
-                    model: resolve_model_alias_with_config(&model),
+                    model: resolve_prompt_model(model, model_flag_raw.as_deref()),
                     output_format,
                     allowed_tools: normalize_allowed_tools(&allowed_tool_values)?,
                     permission_mode: permission_mode_override
@@ -801,7 +801,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             let piped = buf.trim().to_string();
             if !piped.is_empty() {
                 return Ok(CliAction::Prompt {
-                    model,
+                    model: resolve_prompt_model(model, model_flag_raw.as_deref()),
                     prompt: piped,
                     allowed_tools,
                     permission_mode,
@@ -912,7 +912,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             match classify_skills_slash_command(args.as_deref()) {
                 SkillSlashDispatch::Invoke(prompt) => Ok(CliAction::Prompt {
                     prompt,
-                    model,
+                    model: resolve_prompt_model(model, model_flag_raw.as_deref()),
                     output_format,
                     allowed_tools,
                     permission_mode,
@@ -939,7 +939,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             Ok(CliAction::Prompt {
                 prompt,
-                model,
+                model: resolve_prompt_model(model, model_flag_raw.as_deref()),
                 output_format,
                 allowed_tools,
                 permission_mode,
@@ -951,7 +951,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         }
         other if other.starts_with('/') => parse_direct_slash_cli_action(
             &rest,
-            model,
+            resolve_prompt_model(model, model_flag_raw.as_deref()),
             output_format,
             allowed_tools,
             permission_mode,
@@ -989,7 +989,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             Ok(CliAction::Prompt {
                 prompt: joined,
-                model,
+                model: resolve_prompt_model(model, model_flag_raw.as_deref()),
                 output_format,
                 allowed_tools,
                 permission_mode,
@@ -1537,6 +1537,13 @@ fn resolve_repl_model(cli_model: String) -> String {
         return resolve_model_alias_with_config(&config_model);
     }
     cli_model
+}
+
+fn resolve_prompt_model(cli_model: String, model_flag_raw: Option<&str>) -> String {
+    if model_flag_raw.is_some() {
+        return cli_model;
+    }
+    resolve_repl_model(cli_model)
 }
 
 fn provider_label(kind: ProviderKind) -> &'static str {
@@ -9469,6 +9476,127 @@ mod tests {
                 allow_broad_cwd: false,
             }
         );
+    }
+
+    #[test]
+    fn prompt_subcommand_uses_settings_model_when_model_flag_is_absent() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::create_dir_all(&config_home).expect("config home dir");
+        fs::write(
+            config_home.join("settings.json"),
+            r#"{"model":"qwen3.6-35b-a3b:tr"}"#,
+        )
+        .expect("global settings should write");
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_permission_mode = std::env::var("RUSTY_CLAUDE_PERMISSION_MODE").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+        let args = vec!["prompt".to_string(), "hello".to_string()];
+
+        let parsed = with_current_dir(&cwd, || parse_args(&args).expect("args should parse"));
+
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        match original_permission_mode {
+            Some(value) => std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", value),
+            None => std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE"),
+        }
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+
+        match parsed {
+            CliAction::Prompt { model, .. } => assert_eq!(model, "qwen3.6-35b-a3b:tr"),
+            other => panic!("expected Prompt action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prompt_subcommand_prefers_project_model_over_global_model() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&config_home).expect("config home dir");
+        fs::write(
+            config_home.join("settings.json"),
+            r#"{"model":"qwen3.6-35b-a3b:tr"}"#,
+        )
+        .expect("global settings should write");
+        fs::write(
+            cwd.join(".claw").join("settings.json"),
+            r#"{"model":"qwen3.6-35b-a3b:SR"}"#,
+        )
+        .expect("project settings should write");
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_permission_mode = std::env::var("RUSTY_CLAUDE_PERMISSION_MODE").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+        let args = vec!["prompt".to_string(), "hello".to_string()];
+
+        let parsed = with_current_dir(&cwd, || parse_args(&args).expect("args should parse"));
+
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        match original_permission_mode {
+            Some(value) => std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", value),
+            None => std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE"),
+        }
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+
+        match parsed {
+            CliAction::Prompt { model, .. } => assert_eq!(model, "qwen3.6-35b-a3b:SR"),
+            other => panic!("expected Prompt action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explicit_model_flag_overrides_settings_model_for_prompt_subcommand() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let config_home = root.join("config-home");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::create_dir_all(&config_home).expect("config home dir");
+        fs::write(
+            config_home.join("settings.json"),
+            r#"{"model":"qwen3.6-35b-a3b:tr"}"#,
+        )
+        .expect("global settings should write");
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        let original_permission_mode = std::env::var("RUSTY_CLAUDE_PERMISSION_MODE").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+        std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE");
+        let args = vec![
+            "--model".to_string(),
+            "qwen3.6-27b:mp".to_string(),
+            "prompt".to_string(),
+            "hello".to_string(),
+        ];
+
+        let parsed = with_current_dir(&cwd, || parse_args(&args).expect("args should parse"));
+
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        match original_permission_mode {
+            Some(value) => std::env::set_var("RUSTY_CLAUDE_PERMISSION_MODE", value),
+            None => std::env::remove_var("RUSTY_CLAUDE_PERMISSION_MODE"),
+        }
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+
+        match parsed {
+            CliAction::Prompt { model, .. } => assert_eq!(model, "qwen3.6-27b:mp"),
+            other => panic!("expected Prompt action, got {other:?}"),
+        }
     }
 
     #[test]

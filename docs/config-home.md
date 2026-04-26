@@ -36,3 +36,16 @@ environment:
 `./workspace/.claw/settings.json` is the only project config path. `./claw-home/.claw/` owns global settings and runtime state.
 
 The local Dockerfile is expected to clone `CLAW_REPO` at `CLAW_REF`. During feature validation, set `CLAW_REF` to a pushed feature branch; after merging, set it back to `main`.
+
+## Model Precedence
+
+The merged settings `model` is used by both REPL and one-shot prompt execution when `--model` is not supplied.
+
+Precedence:
+
+1. `--model`
+2. `<project>/.claw/settings.json`
+3. `$CLAW_CONFIG_HOME/settings.json`
+4. built-in default model
+
+This applies to `claw prompt`, `claw -p`, shorthand prompt mode, piped prompts, and slash-command paths that invoke a prompt.
