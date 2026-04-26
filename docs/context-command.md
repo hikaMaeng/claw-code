@@ -15,7 +15,8 @@
 - `claw context`, `claw /context`, and resumed `claw --resume SESSION.jsonl /context` are local commands.
 - The command must not issue an LLM request.
 - `models[].maxContext` is the context-window source when the selected model is configured.
+- `models[].maxOutputTokens` is the configured response cap when present.
 - The auto-compact line uses the same threshold as runtime auto-compaction.
-- Text and JSON output include message estimate, system prompt estimate where available, autocompact buffer, free space, config-file counts, and memory-file count.
+- Text and JSON output include message estimate, system prompt estimate where available, autocompact buffer, free space, next request output budget, config-file counts, and memory-file count.
 - Text output is intentionally compact: one usage headline, one ASCII context bar, a short category table, and a footer with workspace/config/session hints.
 - `/context clear` is rejected; users must use `/clear` or `/compact`.

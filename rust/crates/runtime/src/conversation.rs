@@ -35,6 +35,7 @@ pub enum AssistantEvent {
         name: String,
         input: String,
     },
+    StopReason(String),
     Usage(TokenUsage),
     PromptCache(PromptCacheEvent),
     MessageStop,
@@ -115,6 +116,7 @@ pub struct TurnSummary {
     pub iterations: usize,
     pub usage: TokenUsage,
     pub auto_compaction: Option<AutoCompactionEvent>,
+    pub output_limit_hit: bool,
 }
 
 /// Details about automatic session compaction applied during a turn.
@@ -343,6 +345,7 @@ where
         let mut assistant_messages = Vec::new();
         let mut tool_results = Vec::new();
         let mut prompt_cache_events = Vec::new();
+        let mut output_limit_hit = false;
         let mut iterations = 0;
 
         loop {
@@ -359,7 +362,7 @@ where
                 system_prompt: self.system_prompt.clone(),
                 messages: self.session.messages.clone(),
             };
-            let (assistant_message, usage, turn_prompt_cache_events) =
+            let (assistant_message, usage, turn_prompt_cache_events, stop_reason) =
                 match self.build_assistant_message_with_empty_stream_retry(&request) {
                     Ok(result) => result,
                     Err(error) => {
@@ -367,6 +370,12 @@ where
                         return Err(error);
                     }
                 };
+            if stop_reason.as_deref() == Some("length")
+                || stop_reason.as_deref() == Some("max_tokens")
+                || stop_reason.as_deref() == Some("max_output_tokens")
+            {
+                output_limit_hit = true;
+            }
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
             }
@@ -507,6 +516,7 @@ where
             iterations,
             usage: self.usage_tracker.cumulative_usage(),
             auto_compaction,
+            output_limit_hit,
         };
         self.record_turn_completed(&summary);
 
@@ -521,6 +531,7 @@ where
             ConversationMessage,
             Option<TokenUsage>,
             Vec<PromptCacheEvent>,
+            Option<String>,
         ),
         RuntimeError,
     > {
@@ -741,6 +752,7 @@ fn build_assistant_message(
         ConversationMessage,
         Option<TokenUsage>,
         Vec<PromptCacheEvent>,
+        Option<String>,
     ),
     RuntimeError,
 > {
@@ -749,6 +761,7 @@ fn build_assistant_message(
     let mut prompt_cache_events = Vec::new();
     let mut finished = false;
     let mut usage = None;
+    let mut stop_reason = None;
 
     for event in events {
         match event {
@@ -757,6 +770,7 @@ fn build_assistant_message(
                 flush_text_block(&mut text, &mut blocks);
                 blocks.push(ContentBlock::ToolUse { id, name, input });
             }
+            AssistantEvent::StopReason(value) => stop_reason = Some(value),
             AssistantEvent::Usage(value) => usage = Some(value),
             AssistantEvent::PromptCache(event) => prompt_cache_events.push(event),
             AssistantEvent::MessageStop => {
@@ -780,6 +794,7 @@ fn build_assistant_message(
         ConversationMessage::assistant_with_usage(blocks, usage),
         usage,
         prompt_cache_events,
+        stop_reason,
     ))
 }
 
@@ -1757,16 +1772,46 @@ mod tests {
     }
 
     #[test]
+    fn run_turn_marks_output_limit_when_provider_reports_length_stop() {
+        struct LengthStopApi;
+
+        impl ApiClient for LengthStopApi {
+            fn stream(
+                &mut self,
+                _request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                Ok(vec![
+                    AssistantEvent::TextDelta("partial".to_string()),
+                    AssistantEvent::StopReason("length".to_string()),
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            LengthStopApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        let summary = runtime
+            .run_turn("hello", None)
+            .expect("length stop should still preserve partial assistant text");
+
+        assert!(summary.output_limit_hit);
+        assert_eq!(summary.assistant_messages.len(), 1);
+    }
+
+    #[test]
     fn run_turn_retries_once_when_provider_streams_empty_message() {
         struct EmptyThenTextApi {
             calls: Arc<AtomicUsize>,
         }
 
         impl ApiClient for EmptyThenTextApi {
-            fn stream(
-                &mut self,
-                request: ApiRequest,
-            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
                 assert_eq!(
                     request
                         .messages

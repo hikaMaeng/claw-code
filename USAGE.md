@@ -197,7 +197,7 @@ Supported permission modes:
 
 ## Providers and Models
 
-Model selection is settings-backed. `providers` names endpoints, and `models` maps exact model names to those providers plus a required `maxContext` context window.
+Model selection is settings-backed. `providers` names endpoints, and `models` maps exact model names to those providers plus a required `maxContext` context window. `maxOutputTokens` is optional and caps the response length Claw requests from the provider.
 
 ```json
 {
@@ -217,7 +217,8 @@ Model selection is settings-backed. `providers` names endpoints, and `models` ma
     {
       "name": "qwen3.6-35b-a3b:tr",
       "provider": "local-lmstudio",
-      "maxContext": 262000
+      "maxContext": 262000,
+      "maxOutputTokens": 2048
     },
     {
       "name": "qwen-plus",
@@ -241,7 +242,9 @@ When `--model` is omitted, both interactive `claw` and non-interactive prompt mo
 
 Automatic compaction uses `models[].maxContext`. The trigger is calculated at roughly 83.5% of the context window, leaving a 16.5% buffer for system tools, MCP tools, deferred tool definitions, and the next turn. For a 200k context model this triggers near 167k input tokens and keeps about 33k tokens as buffer.
 
-`/context` is a local diagnostic command. It does not call the model. It reads the active session token estimate, the selected model's `models[].maxContext`, and the derived auto-compact threshold, then renders a context-window breakdown with messages, system prompt, memory file count, autocompact buffer, and free space. `claw context`, `claw /context`, and `claw --resume SESSION.jsonl /context` expose the same report; `--output-format json` returns the machine-readable shape.
+For each request, Claw derives the provider `max_tokens` from `models[].maxOutputTokens`, `models[].maxContext`, the estimated input tokens, and a 4096-token safety buffer. This prevents `input + output` from exceeding the model context window while still honoring the configured response cap when there is enough room. If `maxOutputTokens` is omitted, the provider/model default output cap is used.
+
+`/context` is a local diagnostic command. It does not call the model. It reads the active session token estimate, the selected model's `models[].maxContext`, `models[].maxOutputTokens`, and the derived auto-compact threshold, then renders a context-window breakdown with messages, system prompt, memory file count, autocompact buffer, free space, and the next request output budget. `claw context`, `claw /context`, and `claw --resume SESSION.jsonl /context` expose the same report; `--output-format json` returns the machine-readable shape.
 
 ## FAQ
 

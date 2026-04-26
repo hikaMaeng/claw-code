@@ -33,7 +33,13 @@ pub struct CompactionResult {
 /// Roughly estimates the token footprint of the current session transcript.
 #[must_use]
 pub fn estimate_session_tokens(session: &Session) -> usize {
-    session.messages.iter().map(estimate_message_tokens).sum()
+    estimate_messages_tokens(&session.messages)
+}
+
+/// Roughly estimates the token footprint of a message slice.
+#[must_use]
+pub fn estimate_messages_tokens(messages: &[ConversationMessage]) -> usize {
+    messages.iter().map(estimate_message_tokens).sum()
 }
 
 /// Returns `true` when the session exceeds the configured compaction budget.

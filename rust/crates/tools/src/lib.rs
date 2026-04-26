@@ -4773,6 +4773,9 @@ async fn stream_with_provider(
                 }
             }
             ApiStreamEvent::MessageDelta(delta) => {
+                if let Some(reason) = delta.delta.stop_reason {
+                    events.push(AssistantEvent::StopReason(reason));
+                }
                 events.push(AssistantEvent::Usage(delta.usage.token_usage()));
             }
             ApiStreamEvent::MessageStop(_) => {
@@ -4932,6 +4935,9 @@ fn response_to_events(response: MessageResponse) -> Vec<AssistantEvent> {
         }
     }
 
+    if let Some(stop_reason) = response.stop_reason {
+        events.push(AssistantEvent::StopReason(stop_reason));
+    }
     events.push(AssistantEvent::Usage(response.usage.token_usage()));
     events.push(AssistantEvent::MessageStop);
     events

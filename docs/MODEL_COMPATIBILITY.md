@@ -142,7 +142,8 @@ let max_tokens_key = if wire_model.starts_with("gpt-5") {
     {
       "name": "qwen-plus",
       "provider": "dashscope",
-      "maxContext": 131072
+      "maxContext": 131072,
+      "maxOutputTokens": 8192
     }
   ]
 }

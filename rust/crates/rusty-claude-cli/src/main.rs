@@ -24,10 +24,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use api::{
-    detect_provider_kind, resolve_startup_auth_source, AnthropicClient, AuthSource,
-    ContentBlockDelta, InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock, PromptCache, ProviderClient as ApiProviderClient, ProviderKind,
-    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
+    detect_provider_kind, max_tokens_for_model as default_max_tokens_for_model,
+    resolve_startup_auth_source, AnthropicClient, AuthSource, ContentBlockDelta, InputContentBlock,
+    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, PromptCache,
+    ProviderClient as ApiProviderClient, ProviderKind, StreamEvent as ApiStreamEvent, ToolChoice,
+    ToolDefinition, ToolResultContentBlock,
 };
 
 use commands::{
@@ -133,11 +134,8 @@ impl ModelProvenance {
 }
 
 fn max_tokens_for_model(model: &str) -> u32 {
-    if model.contains("opus") {
-        32_000
-    } else {
-        64_000
-    }
+    configured_max_output_tokens_for_model(model)
+        .unwrap_or_else(|| default_max_tokens_for_model(model))
 }
 // Build-time constants injected by build.rs (fall back to static values when
 // build.rs hasn't run, e.g. in doc-test or unusual toolchain environments).
@@ -2818,6 +2816,8 @@ struct ContextCategory {
 struct ContextSnapshot {
     model: String,
     max_context: Option<u32>,
+    max_output_tokens: Option<u32>,
+    next_request_output_tokens: Option<u32>,
     auto_compact_threshold: Option<u32>,
     estimated_used_tokens: usize,
     categories: Vec<ContextCategory>,
@@ -3014,6 +3014,12 @@ fn format_compact_report(removed: usize, resulting_messages: usize, skipped: boo
 
 fn format_auto_compaction_notice(removed: usize) -> String {
     format!("[auto-compacted: removed {removed} messages]")
+}
+
+fn format_output_limit_notice(max_output_tokens: u32) -> String {
+    format!(
+        "[output limit hit: response reached maxOutputTokens={max_output_tokens}; use /continue to request the next chunk]"
+    )
 }
 
 fn parse_git_status_metadata(status: Option<&str>) -> (Option<PathBuf>, Option<String>) {
@@ -3240,13 +3246,23 @@ fn run_resume_command(
                 .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
             let model = session.model.as_deref().unwrap_or("restored-session");
             let max_context = configured_max_context_for_model(model);
+            let max_output_tokens = configured_max_output_tokens_for_model(model);
             let auto_compact_threshold =
                 max_context.map(runtime::auto_compaction_threshold_from_max_context);
             let message_tokens = runtime::estimate_session_tokens(session);
+            let next_request_output_tokens = max_context.map(|max_context| {
+                bounded_output_tokens(
+                    max_tokens_for_model(model),
+                    max_context,
+                    u32::try_from(message_tokens).unwrap_or(u32::MAX),
+                )
+            });
             let context = status_context(Some(session_path))?;
             let snapshot = ContextSnapshot {
                 model: model.to_string(),
                 max_context,
+                max_output_tokens,
+                next_request_output_tokens,
                 auto_compact_threshold,
                 estimated_used_tokens: message_tokens,
                 categories: build_context_categories(
@@ -4347,6 +4363,12 @@ impl LiveCli {
                         format_auto_compaction_notice(event.removed_message_count)
                     );
                 }
+                if summary.output_limit_hit {
+                    println!(
+                        "{}",
+                        format_output_limit_notice(max_tokens_for_model(&self.model))
+                    );
+                }
                 self.persist_session()?;
                 Ok(())
             }
@@ -4403,6 +4425,7 @@ impl LiveCli {
                 "message": final_assistant_text(&summary),
                 "compact": true,
                 "model": self.model,
+                "output_limit_hit": summary.output_limit_hit,
                 "usage": {
                     "input_tokens": summary.usage.input_tokens,
                     "output_tokens": summary.usage.output_tokens,
@@ -4428,6 +4451,7 @@ impl LiveCli {
                 "message": final_assistant_text(&summary),
                 "model": self.model,
                 "iterations": summary.iterations,
+                "output_limit_hit": summary.output_limit_hit,
                 "auto_compaction": summary.auto_compaction.map(|event| json!({
                     "removed_messages": event.removed_message_count,
                     "notice": format_auto_compaction_notice(event.removed_message_count),
@@ -5550,11 +5574,17 @@ fn print_context_snapshot(
     };
     let context = status_context(None)?;
     let max_context = configured_max_context_for_model(&provenance.resolved);
+    let max_output_tokens = configured_max_output_tokens_for_model(&provenance.resolved);
     let auto_compact_threshold =
         max_context.map(runtime::auto_compaction_threshold_from_max_context);
+    let next_request_output_tokens = max_context.map(|max_context| {
+        bounded_output_tokens(max_tokens_for_model(&provenance.resolved), max_context, 0)
+    });
     let snapshot = ContextSnapshot {
         model: provenance.resolved.clone(),
         max_context,
+        max_output_tokens,
+        next_request_output_tokens,
         auto_compact_threshold,
         estimated_used_tokens: 0,
         categories: build_context_categories(
@@ -5585,7 +5615,64 @@ fn print_context_snapshot(
 fn configured_max_context_for_model(model: &str) -> Option<u32> {
     let cwd = env::current_dir().ok()?;
     let loader = ConfigLoader::default_for(&cwd);
-    loader.load().ok()?.feature_config().max_context_for_model(model)
+    loader
+        .load()
+        .ok()?
+        .feature_config()
+        .max_context_for_model(model)
+}
+
+fn configured_max_output_tokens_for_model(model: &str) -> Option<u32> {
+    let cwd = env::current_dir().ok()?;
+    let loader = ConfigLoader::default_for(&cwd);
+    loader
+        .load()
+        .ok()?
+        .feature_config()
+        .max_output_tokens_for_model(model)
+}
+
+const OUTPUT_REQUEST_SAFETY_BUFFER_TOKENS: u32 = 4_096;
+const MIN_REQUEST_OUTPUT_TOKENS: u32 = 256;
+
+fn requested_output_tokens_for_turn(model: &str, request: &ApiRequest) -> u32 {
+    let configured_max = max_tokens_for_model(model);
+    let Some(max_context) = configured_max_context_for_model(model) else {
+        return configured_max;
+    };
+    let estimated_input = estimate_turn_input_tokens(request);
+    bounded_output_tokens(configured_max, max_context, estimated_input)
+}
+
+fn bounded_output_tokens(configured_max: u32, max_context: u32, estimated_input: u32) -> u32 {
+    let available = max_context
+        .saturating_sub(estimated_input)
+        .saturating_sub(OUTPUT_REQUEST_SAFETY_BUFFER_TOKENS);
+    configured_max.min(available.max(MIN_REQUEST_OUTPUT_TOKENS))
+}
+
+fn estimate_turn_input_tokens(request: &ApiRequest) -> u32 {
+    let system_tokens = request
+        .system_prompt
+        .iter()
+        .map(|section| estimate_text_tokens(section))
+        .sum::<usize>();
+    let message_tokens = runtime::estimate_messages_tokens(&request.messages);
+    u32::try_from(system_tokens.saturating_add(message_tokens)).unwrap_or(u32::MAX)
+}
+
+fn output_budget_system_instruction(max_tokens: u32) -> String {
+    format!(
+        "Output budget: keep this assistant response within {max_tokens} output tokens. \
+         Prioritize actionable results and essential implementation details. \
+         If the full answer cannot fit, summarize remaining work and stop cleanly."
+    )
+}
+
+fn system_prompt_with_output_budget(system_prompt: &[String], max_tokens: u32) -> Vec<String> {
+    let mut sections = system_prompt.to_vec();
+    sections.push(output_budget_system_instruction(max_tokens));
+    sections
 }
 
 fn estimate_text_tokens(text: &str) -> usize {
@@ -5635,11 +5722,10 @@ fn build_context_categories(
     ]
 }
 
-fn context_snapshot_for_live(
-    cli: &LiveCli,
-) -> Result<ContextSnapshot, Box<dyn std::error::Error>> {
+fn context_snapshot_for_live(cli: &LiveCli) -> Result<ContextSnapshot, Box<dyn std::error::Error>> {
     let context = status_context(Some(&cli.session.path))?;
     let max_context = configured_max_context_for_model(&cli.model);
+    let max_output_tokens = configured_max_output_tokens_for_model(&cli.model);
     let auto_compact_threshold = Some(cli.runtime.auto_compaction_input_tokens_threshold());
     let message_tokens = cli.runtime.estimated_tokens();
     let system_prompt_tokens = cli
@@ -5647,11 +5733,21 @@ fn context_snapshot_for_live(
         .iter()
         .map(|section| estimate_text_tokens(section))
         .sum();
+    let estimated_used_tokens = message_tokens.saturating_add(system_prompt_tokens);
+    let next_request_output_tokens = max_context.map(|max_context| {
+        bounded_output_tokens(
+            max_tokens_for_model(&cli.model),
+            max_context,
+            u32::try_from(estimated_used_tokens).unwrap_or(u32::MAX),
+        )
+    });
     Ok(ContextSnapshot {
         model: cli.model.clone(),
         max_context,
+        max_output_tokens,
+        next_request_output_tokens,
         auto_compact_threshold,
-        estimated_used_tokens: message_tokens.saturating_add(system_prompt_tokens),
+        estimated_used_tokens,
         categories: build_context_categories(
             message_tokens,
             system_prompt_tokens,
@@ -5762,16 +5858,27 @@ fn format_context_report(snapshot: &ContextSnapshot) -> String {
         .as_ref()
         .map(|provenance| format!(" · source={}", provenance.source.as_str()))
         .unwrap_or_default();
-    let max_context_display = snapshot
-        .max_context
-        .map_or_else(|| "unknown".to_string(), |tokens| format_compact_tokens(tokens as usize));
+    let max_context_display = snapshot.max_context.map_or_else(
+        || "unknown".to_string(),
+        |tokens| format_compact_tokens(tokens as usize),
+    );
+    let max_output_display = snapshot.max_output_tokens.map_or_else(
+        || "default".to_string(),
+        |tokens| format_compact_tokens(tokens as usize),
+    );
+    let next_output_display = snapshot.next_request_output_tokens.map_or_else(
+        || max_output_display.clone(),
+        |tokens| format_compact_tokens(tokens as usize),
+    );
     let mut lines = vec![format!(
-        "Context Usage  {}{}  {}/{} tokens ({})",
+        "Context Usage  {}{}  {}/{} tokens ({}) · output {}/{}",
         snapshot.model,
         source_line,
         format_compact_tokens(snapshot.estimated_used_tokens),
         max_context_display,
         format_context_percent(snapshot.estimated_used_tokens, snapshot.max_context),
+        next_output_display,
+        max_output_display,
     )];
     lines.push(format!("  {}", format_context_bar(snapshot)));
     lines.push("  Estimated usage by category".to_string());
@@ -5804,6 +5911,16 @@ fn format_context_report(snapshot: &ContextSnapshot) -> String {
         threshold, headroom, snapshot.max_context_source,
     ));
     lines.push(format!(
+        "  Output     next request {} tokens · configured max {} tokens · safety {}",
+        snapshot
+            .next_request_output_tokens
+            .map_or_else(|| "default".to_string(), |tokens| tokens.to_string()),
+        snapshot
+            .max_output_tokens
+            .map_or_else(|| "default".to_string(), |tokens| tokens.to_string()),
+        OUTPUT_REQUEST_SAFETY_BUFFER_TOKENS,
+    ));
+    lines.push(format!(
         "  Workspace  cwd={} · config {}/{} · memory files {} · session {}",
         snapshot.context.cwd.display(),
         snapshot.context.loaded_config_files,
@@ -5833,6 +5950,9 @@ fn context_json_value(snapshot: &ContextSnapshot) -> serde_json::Value {
         "context_window": {
             "max_context": snapshot.max_context,
             "max_context_source": snapshot.max_context_source,
+            "max_output_tokens": snapshot.max_output_tokens,
+            "next_request_output_tokens": snapshot.next_request_output_tokens,
+            "output_safety_buffer_tokens": OUTPUT_REQUEST_SAFETY_BUFFER_TOKENS,
             "estimated_used_tokens": snapshot.estimated_used_tokens,
             "estimated_used_percent": context_percent(
                 snapshot.estimated_used_tokens,
@@ -7964,11 +8084,15 @@ impl ApiClient for AnthropicRuntimeClient {
             progress_reporter.mark_model_phase();
         }
         let is_post_tool = request_ends_with_tool_result(&request);
+        let requested_output_tokens = requested_output_tokens_for_turn(&self.model, &request);
         let message_request = MessageRequest {
             model: self.model.clone(),
-            max_tokens: max_tokens_for_model(&self.model),
+            max_tokens: requested_output_tokens,
             messages: convert_messages(&request.messages),
-            system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
+            system: Some(
+                system_prompt_with_output_budget(&request.system_prompt, requested_output_tokens)
+                    .join("\n\n"),
+            ),
             tools: self
                 .enable_tools
                 .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref())),
@@ -8130,6 +8254,9 @@ impl AnthropicRuntimeClient {
                     }
                 }
                 ApiStreamEvent::MessageDelta(delta) => {
+                    if let Some(reason) = delta.delta.stop_reason {
+                        events.push(AssistantEvent::StopReason(reason));
+                    }
                     events.push(AssistantEvent::Usage(delta.usage.token_usage()));
                 }
                 ApiStreamEvent::MessageStop(_) => {
@@ -9065,6 +9192,9 @@ fn response_to_events(
         }
     }
 
+    if let Some(stop_reason) = response.stop_reason {
+        events.push(AssistantEvent::StopReason(stop_reason));
+    }
     events.push(AssistantEvent::Usage(response.usage.token_usage()));
     events.push(AssistantEvent::MessageStop);
     Ok(events)
@@ -9455,9 +9585,11 @@ fn print_help(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::
 mod tests {
     use super::{
         build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        build_context_categories, classify_error_kind, collect_session_prompt_history,
-        configured_max_context_for_model, context_json_value, create_managed_session_handle,
-        describe_tool_progress, filter_tool_specs, format_bughunter_report,
+        bounded_output_tokens, build_context_categories, classify_error_kind,
+        collect_session_prompt_history, configured_max_context_for_model,
+        configured_max_output_tokens_for_model, context_json_value,
+        create_managed_session_handle, describe_tool_progress, filter_tool_specs,
+        format_bughunter_report,
         format_commit_preflight_report, format_commit_skipped_report, format_compact_report,
         format_connected_line, format_context_report, format_cost_report, format_history_timestamp,
         format_internal_prompt_progress_line, format_issue_report, format_model_report,
@@ -12494,7 +12626,8 @@ UU conflicted.rs",
                 {
                   "name": "qwen3.6-35b-a3b:tr",
                   "provider": "local-lmstudio",
-                  "maxContext": 262000
+                  "maxContext": 262000,
+                  "maxOutputTokens": 2048
                 }
               ]
             }"#,
@@ -12505,11 +12638,15 @@ UU conflicted.rs",
 
         let (json, text) = with_current_dir(&cwd, || {
             let max_context = configured_max_context_for_model("qwen3.6-35b-a3b:tr");
+            let max_output_tokens = configured_max_output_tokens_for_model("qwen3.6-35b-a3b:tr");
             let threshold = max_context.map(runtime::auto_compaction_threshold_from_max_context);
             let context = status_context(None).expect("status context should load");
             let snapshot = ContextSnapshot {
                 model: "qwen3.6-35b-a3b:tr".to_string(),
                 max_context,
+                max_output_tokens,
+                next_request_output_tokens: max_context
+                    .map(|max_context| bounded_output_tokens(2_048, max_context, 1_500)),
                 auto_compact_threshold: threshold,
                 estimated_used_tokens: 1_500,
                 categories: build_context_categories(1_200, 300, 0, max_context, threshold),
@@ -12517,7 +12654,10 @@ UU conflicted.rs",
                 model_provenance: None,
                 max_context_source: "settings.models[].maxContext",
             };
-            (context_json_value(&snapshot), format_context_report(&snapshot))
+            (
+                context_json_value(&snapshot),
+                format_context_report(&snapshot),
+            )
         });
 
         match original_config_home {
@@ -12527,6 +12667,8 @@ UU conflicted.rs",
         fs::remove_dir_all(root).expect("cleanup temp dir");
 
         assert_eq!(json["context_window"]["max_context"], 262000);
+        assert_eq!(json["context_window"]["max_output_tokens"], 2048);
+        assert_eq!(json["context_window"]["next_request_output_tokens"], 2048);
         assert_eq!(json["context_window"]["auto_compact_threshold"], 218770);
         assert_eq!(json["context_window"]["autocompact_buffer_tokens"], 43230);
         assert_eq!(json["context_window"]["free_tokens"], 217270);
@@ -12535,10 +12677,18 @@ UU conflicted.rs",
         assert!(text.contains("Estimated usage by category"), "{text}");
         assert!(text.contains("Autocompact buffer"), "{text}");
         assert!(text.contains("settings.models[].maxContext"), "{text}");
+        assert!(text.contains("output 2.0k/2.0k"), "{text}");
         assert!(
             !text.lines().any(str::is_empty),
             "context report should not waste vertical space:\n{text}"
         );
+    }
+
+    #[test]
+    fn bounded_output_tokens_reserves_context_headroom() {
+        assert_eq!(bounded_output_tokens(8_192, 262_000, 120_000), 8_192);
+        assert_eq!(bounded_output_tokens(8_192, 10_000, 7_000), 256);
+        assert_eq!(bounded_output_tokens(8_192, 20_000, 12_000), 3_904);
     }
 
     #[test]

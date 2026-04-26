@@ -73,6 +73,7 @@ pub struct ModelRegistryEntry {
     name: String,
     provider: String,
     max_context: u32,
+    max_output_tokens: Option<u32>,
 }
 
 /// Structured feature configuration consumed by runtime subsystems.
@@ -510,6 +511,12 @@ impl RuntimeFeatureConfig {
     }
 
     #[must_use]
+    pub fn max_output_tokens_for_model(&self, model_name: &str) -> Option<u32> {
+        self.model_entry(model_name)
+            .and_then(ModelRegistryEntry::max_output_tokens)
+    }
+
+    #[must_use]
     pub fn aliases(&self) -> &BTreeMap<String, String> {
         &self.aliases
     }
@@ -606,7 +613,14 @@ impl ModelRegistryEntry {
             name: name.into(),
             provider: provider.into(),
             max_context,
+            max_output_tokens: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_max_output_tokens(mut self, max_output_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_output_tokens;
+        self
     }
 
     #[must_use]
@@ -622,6 +636,11 @@ impl ModelRegistryEntry {
     #[must_use]
     pub fn max_context(&self) -> u32 {
         self.max_context
+    }
+
+    #[must_use]
+    pub fn max_output_tokens(&self) -> Option<u32> {
+        self.max_output_tokens
     }
 }
 
@@ -917,7 +936,14 @@ fn parse_optional_model_registry(root: &JsonValue) -> Result<Vec<ModelRegistryEn
                     "{context}: field maxContext must be greater than zero"
                 )));
             }
-            Ok(ModelRegistryEntry::new(name, provider, max_context))
+            let max_output_tokens = optional_u32(model, "maxOutputTokens", &context)?;
+            if max_output_tokens == Some(0) {
+                return Err(ConfigError::Parse(format!(
+                    "{context}: field maxOutputTokens must be greater than zero"
+                )));
+            }
+            Ok(ModelRegistryEntry::new(name, provider, max_context)
+                .with_max_output_tokens(max_output_tokens))
         })
         .collect()
 }
@@ -1684,7 +1710,8 @@ mod tests {
                 {
                   "name": "qwen3.6-35b-a3b:tr",
                   "provider": "local",
-                  "maxContext": 262000
+                  "maxContext": 262000,
+                  "maxOutputTokens": 2048
                 }
               ]
             }"#,
@@ -1707,6 +1734,54 @@ mod tests {
                 .feature_config()
                 .max_context_for_model("qwen3.6-35b-a3b:tr"),
             Some(262_000)
+        );
+        assert_eq!(
+            loaded
+                .feature_config()
+                .max_output_tokens_for_model("qwen3.6-35b-a3b:tr"),
+            Some(2_048)
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn rejects_zero_model_max_output_tokens() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(&cwd).expect("project dir");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "providers": {
+                "local": {
+                  "type": "openai",
+                  "url": "http://192.168.0.6:12345/v1"
+                }
+              },
+              "models": [
+                {
+                  "name": "qwen3.6-35b-a3b:tr",
+                  "provider": "local",
+                  "maxContext": 262000,
+                  "maxOutputTokens": 0
+                }
+              ]
+            }"#,
+        )
+        .expect("write model registry settings");
+
+        let error = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect_err("zero maxOutputTokens should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("maxOutputTokens must be greater than zero"),
+            "{error}"
         );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
