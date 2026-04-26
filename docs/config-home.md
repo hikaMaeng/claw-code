@@ -35,4 +35,4 @@ environment:
 
 `./workspace/.claw/settings.json` is the only project config path. `./claw-home/.claw/` owns global settings and runtime state.
 
-The local Dockerfile is expected to build from the local repository source through a Compose `additional_contexts.claw_source` entry. This keeps local commits testable before they are pushed to GitHub.
+The local Dockerfile is expected to clone `CLAW_REPO` at `CLAW_REF`. During feature validation, set `CLAW_REF` to a pushed feature branch; after merging, set it back to `main`.

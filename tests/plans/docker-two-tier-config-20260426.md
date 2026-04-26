@@ -5,7 +5,7 @@
 Verify the `F:\desktop\docker\crawcode` Docker stack builds the local Claw source and preserves global/project `.claw` config precedence in mounted volumes.
 ## Environment
 - Compose project: `/mnt/f/desktop/docker/crawcode`
-- Source context: `/mnt/f/document/New project`
+- Source ref: `https://github.com/hikaMaeng/claw-code.git`, branch `codex/two-tier-claw-config`
 - Image: `claw-code:local`
 - Service: `claw`
 ## Preconditions
@@ -22,7 +22,7 @@ Verify the `F:\desktop\docker\crawcode` Docker stack builds the local Claw sourc
 6. Inspect container mounts and `$CLAW_CONFIG_HOME`.
 7. Confirm no `/home/claw/.codex`, `/home/claw/.config/claw`, or `/workspace/.claw` global mount is present.
 ## Expected Results
-- The image builds from local source via the `claw_source` build context.
+- The image builds from GitHub using `CLAW_REPO` and `CLAW_REF`.
 - `/workspace` loads two files: `/home/claw/.claw/settings.json` and `/workspace/.claw/settings.json`.
 - `/workspace` resolves `model` to `docker-project-model`.
 - `/tmp` resolves `model` to the global model.
