@@ -17,4 +17,5 @@
 - `models[].maxContext` is the context-window source when the selected model is configured.
 - The auto-compact line uses the same threshold as runtime auto-compaction.
 - Text and JSON output include message estimate, system prompt estimate where available, autocompact buffer, free space, config-file counts, and memory-file count.
+- Text output is intentionally compact: one usage headline, one ASCII context bar, a short category table, and a footer with workspace/config/session hints.
 - `/context clear` is rejected; users must use `/clear` or `/compact`.

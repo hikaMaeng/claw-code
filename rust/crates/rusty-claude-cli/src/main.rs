@@ -5680,61 +5680,137 @@ fn format_context_percent(tokens: usize, max_context: Option<u32>) -> String {
     )
 }
 
+fn context_category_tokens(snapshot: &ContextSnapshot, name: &str) -> usize {
+    snapshot
+        .categories
+        .iter()
+        .find(|category| category.name == name)
+        .map_or(0, |category| category.tokens)
+}
+
+fn format_compact_tokens(tokens: usize) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn format_context_bar(snapshot: &ContextSnapshot) -> String {
+    let Some(max_context) = snapshot.max_context else {
+        return "[context window unknown]".to_string();
+    };
+    let width = 40usize;
+    let max_context = max_context as usize;
+    if max_context == 0 {
+        return "[context window unknown]".to_string();
+    }
+    let used_width = (snapshot.estimated_used_tokens.saturating_mul(width) / max_context)
+        .min(width);
+    let buffer_tokens = context_category_tokens(snapshot, "Autocompact buffer");
+    let buffer_width = (buffer_tokens.saturating_mul(width) / max_context).min(width);
+    let free_width = width.saturating_sub(used_width).saturating_sub(buffer_width);
+    format!(
+        "[{}{}{}] used={} buffer={} free={}",
+        "#".repeat(used_width),
+        "-".repeat(free_width),
+        "!".repeat(buffer_width),
+        format_compact_tokens(snapshot.estimated_used_tokens),
+        format_compact_tokens(buffer_tokens),
+        format_compact_tokens(context_category_tokens(snapshot, "Free space")),
+    )
+}
+
+fn format_context_row(
+    label: &str,
+    tokens: usize,
+    max_context: Option<u32>,
+    hint: Option<&str>,
+) -> String {
+    let hint = hint.map_or(String::new(), |value| format!("  {value}"));
+    format!(
+        "    {:<20} {:>8} {:>6}{}",
+        label,
+        format_compact_tokens(tokens),
+        format_context_percent(tokens, max_context),
+        hint,
+    )
+}
+
+fn context_session_label(path: Option<&Path>) -> String {
+    path.and_then(Path::file_name)
+        .map_or_else(|| "live-repl".to_string(), |name| name.to_string_lossy().into_owned())
+}
+
 fn format_context_report(snapshot: &ContextSnapshot) -> String {
-    let max_context = snapshot
-        .max_context
-        .map_or_else(|| "unknown".to_string(), |tokens| tokens.to_string());
     let threshold = snapshot
         .auto_compact_threshold
         .map_or_else(|| "unknown".to_string(), |tokens| tokens.to_string());
-    let free_tokens = snapshot
-        .categories
-        .iter()
-        .find(|category| category.name == "Free space")
-        .map_or(0, |category| category.tokens);
+    let free_tokens = context_category_tokens(snapshot, "Free space");
+    let headroom = snapshot
+        .auto_compact_threshold
+        .map(|threshold| (threshold as usize).saturating_sub(snapshot.estimated_used_tokens))
+        .map_or_else(|| "unknown".to_string(), |tokens| tokens.to_string());
     let source_line = snapshot
         .model_provenance
         .as_ref()
-        .map(|provenance| format!("\n  Model source     {}", provenance.source.as_str()))
+        .map(|provenance| format!(" · source={}", provenance.source.as_str()))
         .unwrap_or_default();
+    let max_context_display = snapshot
+        .max_context
+        .map_or_else(|| "unknown".to_string(), |tokens| format_compact_tokens(tokens as usize));
     let mut lines = vec![format!(
-        "Context
-  Model            {}{source_line}
-  Context window   {max_context}
-  Max source       {}
-  Estimated used   {} ({})
-  Auto-compact     {threshold}
-  Free             {} ({})",
+        "Context Usage  {}{}  {}/{} tokens ({})",
         snapshot.model,
-        snapshot.max_context_source,
-        snapshot.estimated_used_tokens,
+        source_line,
+        format_compact_tokens(snapshot.estimated_used_tokens),
+        max_context_display,
         format_context_percent(snapshot.estimated_used_tokens, snapshot.max_context),
-        free_tokens,
-        format_context_percent(free_tokens, snapshot.max_context),
     )];
-    lines.push("Breakdown".to_string());
-    for category in &snapshot.categories {
-        lines.push(format!(
-            "  {:<17} {:>8} {:>7}",
-            category.name,
-            category.tokens,
-            format_context_percent(category.tokens, snapshot.max_context),
-        ));
-    }
+    lines.push(format!("  {}", format_context_bar(snapshot)));
+    lines.push("  Estimated usage by category".to_string());
+    lines.push(format_context_row(
+        "Messages",
+        context_category_tokens(snapshot, "Messages"),
+        snapshot.max_context,
+        None,
+    ));
+    lines.push(format_context_row(
+        "System prompt",
+        context_category_tokens(snapshot, "System prompt"),
+        snapshot.max_context,
+        Some("startup + instructions"),
+    ));
+    lines.push(format_context_row(
+        "Autocompact buffer",
+        context_category_tokens(snapshot, "Autocompact buffer"),
+        snapshot.max_context,
+        Some("/compact"),
+    ));
+    lines.push(format_context_row(
+        "Free space",
+        free_tokens,
+        snapshot.max_context,
+        None,
+    ));
     lines.push(format!(
-        "Workspace
-  Session          {}
-  Memory files     {}
-  Config files     loaded {}/{}",
-        snapshot.context.session_path.as_ref().map_or_else(
-            || "live-repl".to_string(),
-            |path| path.display().to_string(),
-        ),
-        snapshot.context.memory_file_count,
+        "  Threshold compact@{} · headroom {} tokens · max source {}",
+        threshold, headroom, snapshot.max_context_source,
+    ));
+    lines.push(format!(
+        "  Workspace  cwd={} · config {}/{} · memory files {} · session {}",
+        snapshot.context.cwd.display(),
         snapshot.context.loaded_config_files,
         snapshot.context.discovered_config_files,
+        snapshot.context.memory_file_count,
+        context_session_label(snapshot.context.session_path.as_deref()),
     ));
-    lines.join("\n\n")
+    lines.push(format!(
+        "  Next       /compact when near threshold · /skills · /memory · json: claw --output-format json context"
+    ));
+    lines.join("\n")
 }
 
 fn context_json_value(snapshot: &ContextSnapshot) -> serde_json::Value {
@@ -12444,8 +12520,15 @@ UU conflicted.rs",
         assert_eq!(json["context_window"]["auto_compact_threshold"], 218770);
         assert_eq!(json["context_window"]["autocompact_buffer_tokens"], 43230);
         assert_eq!(json["context_window"]["free_tokens"], 217270);
+        assert!(text.contains("Context Usage"), "{text}");
+        assert!(text.contains("["));
+        assert!(text.contains("Estimated usage by category"), "{text}");
         assert!(text.contains("Autocompact buffer"), "{text}");
         assert!(text.contains("settings.models[].maxContext"), "{text}");
+        assert!(
+            !text.lines().any(str::is_empty),
+            "context report should not waste vertical space:\n{text}"
+        );
     }
 
     #[test]
