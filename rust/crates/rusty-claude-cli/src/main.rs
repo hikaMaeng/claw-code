@@ -259,6 +259,10 @@ fn classify_error_kind(message: &str) -> &'static str {
         "unsupported_resumed_command"
     } else if message.contains("confirmation required") {
         "confirmation_required"
+    } else if message.contains("provider_empty_output")
+        || message.contains("assistant stream produced no content")
+    {
+        "provider_empty_output"
     } else if message.contains("api failed") || message.contains("api returned") {
         "api_http_error"
     } else {
@@ -11065,6 +11069,12 @@ mod tests {
         assert_eq!(
             classify_error_kind("api failed after 3 attempts: ..."),
             "api_http_error"
+        );
+        assert_eq!(
+            classify_error_kind(
+                "provider_empty_output: assistant stream produced no content after retry"
+            ),
+            "provider_empty_output"
         );
         assert_eq!(
             classify_error_kind("something completely unknown"),

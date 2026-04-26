@@ -359,15 +359,8 @@ where
                 system_prompt: self.system_prompt.clone(),
                 messages: self.session.messages.clone(),
             };
-            let events = match self.api_client.stream(request) {
-                Ok(events) => events,
-                Err(error) => {
-                    self.record_turn_failed(iterations, &error);
-                    return Err(error);
-                }
-            };
             let (assistant_message, usage, turn_prompt_cache_events) =
-                match build_assistant_message(events) {
+                match self.build_assistant_message_with_empty_stream_retry(&request) {
                     Ok(result) => result,
                     Err(error) => {
                         self.record_turn_failed(iterations, &error);
@@ -518,6 +511,38 @@ where
         self.record_turn_completed(&summary);
 
         Ok(summary)
+    }
+
+    fn build_assistant_message_with_empty_stream_retry(
+        &mut self,
+        request: &ApiRequest,
+    ) -> Result<
+        (
+            ConversationMessage,
+            Option<TokenUsage>,
+            Vec<PromptCacheEvent>,
+        ),
+        RuntimeError,
+    > {
+        let mut retried_empty_stream = false;
+
+        loop {
+            let events = self.api_client.stream(request.clone())?;
+            match build_assistant_message(events) {
+                Ok(result) => return Ok(result),
+                Err(error) if is_empty_assistant_stream_error(&error) && !retried_empty_stream => {
+                    retried_empty_stream = true;
+                    continue;
+                }
+                Err(error) if is_empty_assistant_stream_error(&error) => {
+                    return Err(RuntimeError::new(
+                        "provider_empty_output: assistant stream produced no content after retry; \
+                         provider returned a stop event without text or tool calls",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     #[must_use]
@@ -758,6 +783,12 @@ fn build_assistant_message(
     ))
 }
 
+fn is_empty_assistant_stream_error(error: &RuntimeError) -> bool {
+    error
+        .to_string()
+        .contains("assistant stream produced no content")
+}
+
 fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
     if !text.is_empty() {
         blocks.push(ContentBlock::Text {
@@ -844,7 +875,10 @@ mod tests {
     use crate::ToolError;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
     use telemetry::{MemoryTelemetrySink, SessionTracer, TelemetryEvent};
 
@@ -1720,6 +1754,101 @@ mod tests {
         assert!(error
             .to_string()
             .contains("assistant stream produced no content"));
+    }
+
+    #[test]
+    fn run_turn_retries_once_when_provider_streams_empty_message() {
+        struct EmptyThenTextApi {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl ApiClient for EmptyThenTextApi {
+            fn stream(
+                &mut self,
+                request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .filter(|message| message.role == MessageRole::User)
+                        .count(),
+                    1,
+                    "empty-output retry must not duplicate the user message"
+                );
+                match self.calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => Ok(vec![AssistantEvent::MessageStop]),
+                    1 => Ok(vec![
+                        AssistantEvent::TextDelta("Recovered.".to_string()),
+                        AssistantEvent::MessageStop,
+                    ]),
+                    _ => unreachable!("empty-output recovery should retry only once"),
+                }
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            EmptyThenTextApi {
+                calls: calls.clone(),
+            },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        let summary = runtime
+            .run_turn("hello", None)
+            .expect("empty provider stream should recover on one retry");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(summary.assistant_messages.len(), 1);
+        assert_eq!(runtime.session().messages.len(), 2);
+        assert!(matches!(
+            &runtime.session().messages[1].blocks[0],
+            ContentBlock::Text { text } if text == "Recovered."
+        ));
+    }
+
+    #[test]
+    fn run_turn_reports_provider_empty_output_after_retry_is_empty() {
+        struct AlwaysEmptyApi;
+
+        impl ApiClient for AlwaysEmptyApi {
+            fn stream(
+                &mut self,
+                _request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                Ok(vec![AssistantEvent::MessageStop])
+            }
+        }
+
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            AlwaysEmptyApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        let error = runtime
+            .run_turn("hello", None)
+            .expect_err("persistent empty provider streams should fail explicitly");
+
+        let message = error.to_string();
+        assert!(message.contains("provider_empty_output"));
+        assert!(message.contains("after retry"));
+        assert_eq!(
+            runtime
+                .session()
+                .messages
+                .iter()
+                .filter(|message| message.role == MessageRole::Assistant)
+                .count(),
+            0,
+            "empty assistant output must not be persisted"
+        );
     }
 
     #[test]
