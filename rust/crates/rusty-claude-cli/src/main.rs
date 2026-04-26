@@ -961,7 +961,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         }
         other if other.starts_with('/') => parse_direct_slash_cli_action(
             &rest,
-            resolve_prompt_model(model, model_flag_raw.as_deref()),
+            model,
+            model_flag_raw.as_deref(),
             output_format,
             allowed_tools,
             permission_mode,
@@ -1183,6 +1184,7 @@ fn join_optional_args(args: &[String]) -> Option<String> {
 fn parse_direct_slash_cli_action(
     rest: &[String],
     model: String,
+    model_flag_raw: Option<&str>,
     output_format: CliOutputFormat,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
@@ -1211,7 +1213,7 @@ fn parse_direct_slash_cli_action(
             validate_context_action(action.as_deref())?;
             Ok(CliAction::Context {
                 model,
-                model_flag_raw: None,
+                model_flag_raw: model_flag_raw.map(str::to_string),
                 output_format,
             })
         }
@@ -1219,7 +1221,7 @@ fn parse_direct_slash_cli_action(
             match classify_skills_slash_command(args.as_deref()) {
                 SkillSlashDispatch::Invoke(prompt) => Ok(CliAction::Prompt {
                     prompt,
-                    model,
+                    model: resolve_prompt_model(model, model_flag_raw),
                     output_format,
                     allowed_tools,
                     permission_mode,
