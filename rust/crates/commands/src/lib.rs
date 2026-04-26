@@ -2081,13 +2081,8 @@ pub struct PluginsCommandResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum DefinitionSource {
     ProjectClaw,
-    ProjectCodex,
-    ProjectClaude,
     UserClawConfigHome,
-    UserCodexHome,
     UserClaw,
-    UserCodex,
-    UserClaude,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -2110,11 +2105,9 @@ impl DefinitionScope {
 impl DefinitionSource {
     fn report_scope(self) -> DefinitionScope {
         match self {
-            Self::ProjectClaw | Self::ProjectCodex | Self::ProjectClaude => {
-                DefinitionScope::Project
-            }
-            Self::UserClawConfigHome | Self::UserCodexHome => DefinitionScope::UserConfigHome,
-            Self::UserClaw | Self::UserCodex | Self::UserClaude => DefinitionScope::UserHome,
+            Self::ProjectClaw => DefinitionScope::Project,
+            Self::UserClawConfigHome => DefinitionScope::UserConfigHome,
+            Self::UserClaw => DefinitionScope::UserHome,
         }
     }
 
@@ -3732,15 +3725,9 @@ fn format_mcp_oauth(oauth: Option<&McpOAuthConfig>) -> String {
 
 fn definition_source_id(source: DefinitionSource) -> &'static str {
     match source {
-        DefinitionSource::ProjectClaw
-        | DefinitionSource::ProjectCodex
-        | DefinitionSource::ProjectClaude => "project_claw",
-        DefinitionSource::UserClawConfigHome | DefinitionSource::UserCodexHome => {
-            "user_claw_config_home"
-        }
-        DefinitionSource::UserClaw | DefinitionSource::UserCodex | DefinitionSource::UserClaude => {
-            "user_claw"
-        }
+        DefinitionSource::ProjectClaw => "project_claw",
+        DefinitionSource::UserClawConfigHome => "user_claw_config_home",
+        DefinitionSource::UserClaw => "user_claw",
     }
 }
 
@@ -4033,9 +4020,9 @@ mod tests {
     }
 
     fn write_external_plugin(root: &Path, name: &str, version: &str) {
-        fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
+        fs::create_dir_all(root.join(".claw-plugin")).expect("manifest dir");
         fs::write(
-            root.join(".claude-plugin").join("plugin.json"),
+            root.join(".claw-plugin").join("plugin.json"),
             format!(
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"commands plugin\"\n}}"
             ),
@@ -4044,9 +4031,9 @@ mod tests {
     }
 
     fn write_bundled_plugin(root: &Path, name: &str, version: &str, default_enabled: bool) {
-        fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
+        fs::create_dir_all(root.join(".claw-plugin")).expect("manifest dir");
         fs::write(
-            root.join(".claude-plugin").join("plugin.json"),
+            root.join(".claw-plugin").join("plugin.json"),
             format!(
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"bundled commands plugin\",\n  \"defaultEnabled\": {}\n}}",
                 if default_enabled { "true" } else { "false" }
@@ -4793,9 +4780,9 @@ mod tests {
     #[test]
     fn lists_agents_from_project_and_user_roots() {
         let workspace = temp_dir("agents-workspace");
-        let project_agents = workspace.join(".codex").join("agents");
+        let project_agents = workspace.join(".claw").join("agents");
         let user_home = temp_dir("agents-home");
-        let user_agents = user_home.join(".claude").join("agents");
+        let user_agents = user_home.join(".claw").join("agents");
 
         write_agent(
             &project_agents,
@@ -4820,8 +4807,8 @@ mod tests {
         );
 
         let roots = vec![
-            (DefinitionSource::ProjectCodex, project_agents),
-            (DefinitionSource::UserCodex, user_agents),
+            (DefinitionSource::ProjectClaw, project_agents),
+            (DefinitionSource::UserClaw, user_agents),
         ];
         let report =
             render_agents_report(&load_agents_from_roots(&roots).expect("agent roots should load"));
@@ -4841,9 +4828,9 @@ mod tests {
     #[test]
     fn renders_agents_reports_as_json() {
         let workspace = temp_dir("agents-json-workspace");
-        let project_agents = workspace.join(".codex").join("agents");
+        let project_agents = workspace.join(".claw").join("agents");
         let user_home = temp_dir("agents-json-home");
-        let user_agents = user_home.join(".codex").join("agents");
+        let user_agents = user_home.join(".claw").join("agents");
 
         write_agent(
             &project_agents,
@@ -4868,8 +4855,8 @@ mod tests {
         );
 
         let roots = vec![
-            (DefinitionSource::ProjectCodex, project_agents),
-            (DefinitionSource::UserCodex, user_agents),
+            (DefinitionSource::ProjectClaw, project_agents),
+            (DefinitionSource::UserClaw, user_agents),
         ];
         let report = render_agents_report_json(
             &workspace,
@@ -4907,10 +4894,10 @@ mod tests {
     #[test]
     fn lists_skills_from_project_and_user_roots() {
         let workspace = temp_dir("skills-workspace");
-        let project_skills = workspace.join(".codex").join("skills");
-        let project_commands = workspace.join(".claude").join("commands");
+        let project_skills = workspace.join(".claw").join("skills");
+        let project_commands = workspace.join(".claw").join("commands");
         let user_home = temp_dir("skills-home");
-        let user_skills = user_home.join(".codex").join("skills");
+        let user_skills = user_home.join(".claw").join("skills");
 
         write_skill(&project_skills, "plan", "Project planning guidance");
         write_legacy_command(&project_commands, "deploy", "Legacy deployment guidance");
@@ -4919,17 +4906,17 @@ mod tests {
 
         let roots = vec![
             SkillRoot {
-                source: DefinitionSource::ProjectCodex,
+                source: DefinitionSource::ProjectClaw,
                 path: project_skills,
                 origin: SkillOrigin::SkillsDir,
             },
             SkillRoot {
-                source: DefinitionSource::ProjectClaude,
+                source: DefinitionSource::ProjectClaw,
                 path: project_commands,
                 origin: SkillOrigin::LegacyCommandsDir,
             },
             SkillRoot {
-                source: DefinitionSource::UserCodex,
+                source: DefinitionSource::UserClaw,
                 path: user_skills,
                 origin: SkillOrigin::SkillsDir,
             },
@@ -4972,10 +4959,10 @@ mod tests {
     #[test]
     fn renders_skills_reports_as_json() {
         let workspace = temp_dir("skills-json-workspace");
-        let project_skills = workspace.join(".codex").join("skills");
-        let project_commands = workspace.join(".claude").join("commands");
+        let project_skills = workspace.join(".claw").join("skills");
+        let project_commands = workspace.join(".claw").join("commands");
         let user_home = temp_dir("skills-json-home");
-        let user_skills = user_home.join(".codex").join("skills");
+        let user_skills = user_home.join(".claw").join("skills");
 
         write_skill(&project_skills, "plan", "Project planning guidance");
         write_legacy_command(&project_commands, "deploy", "Legacy deployment guidance");
@@ -4984,17 +4971,17 @@ mod tests {
 
         let roots = vec![
             SkillRoot {
-                source: DefinitionSource::ProjectCodex,
+                source: DefinitionSource::ProjectClaw,
                 path: project_skills,
                 origin: SkillOrigin::SkillsDir,
             },
             SkillRoot {
-                source: DefinitionSource::ProjectClaude,
+                source: DefinitionSource::ProjectClaw,
                 path: project_commands,
                 origin: SkillOrigin::LegacyCommandsDir,
             },
             SkillRoot {
-                source: DefinitionSource::UserCodex,
+                source: DefinitionSource::UserClaw,
                 path: user_skills,
                 origin: SkillOrigin::SkillsDir,
             },
@@ -5090,14 +5077,13 @@ mod tests {
         let workspace = temp_dir("skills-two-tier-workspace");
         let config_home = temp_dir("skills-two-tier-home");
         let ignored_home = temp_dir("skills-two-tier-ignored-home");
-        let ignored_claude_config = temp_dir("skills-two-tier-ignored-claude");
+        let ignored_legacy_config = temp_dir("skills-two-tier-ignored-legacy");
         let project_skills = workspace.join(".claw").join("skills");
         let project_commands = workspace.join(".claw").join("commands");
         let config_skills = config_home.join("skills");
         let config_commands = config_home.join("commands");
         let original_home = std::env::var_os("HOME");
         let original_config_home = std::env::var_os("CLAW_CONFIG_HOME");
-        let original_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
 
         write_skill(&project_skills, "hud", "Project HUD guidance");
         write_legacy_command(&project_commands, "trace", "Project command guidance");
@@ -5113,18 +5099,17 @@ mod tests {
             "Ignored project compatibility guidance",
         );
         write_skill(
-            &ignored_home.join(".claude").join("skills"),
+            &ignored_home.join(".legacy").join("skills"),
             "ignored-home",
             "Ignored home compatibility guidance",
         );
         write_skill(
-            &ignored_claude_config.join("skills"),
-            "ignored-claude-config",
-            "Ignored Claude config guidance",
+            &ignored_legacy_config.join("skills"),
+            "ignored-legacy-config",
+            "Ignored legacy config guidance",
         );
         std::env::set_var("HOME", &ignored_home);
         std::env::set_var("CLAW_CONFIG_HOME", &config_home);
-        std::env::set_var("CLAUDE_CONFIG_DIR", &ignored_claude_config);
 
         let report = super::handle_skills_slash_command(None, &workspace).expect("skills list");
         assert!(report.contains("available skills"));
@@ -5134,7 +5119,7 @@ mod tests {
         assert!(report.contains("doctor-check · Config home command guidance · legacy /commands"));
         assert!(!report.contains("ignored-project"));
         assert!(!report.contains("ignored-home"));
-        assert!(!report.contains("ignored-claude-config"));
+        assert!(!report.contains("ignored-legacy-config"));
 
         let help =
             super::handle_skills_slash_command_json(Some("help"), &workspace).expect("skills help");
@@ -5150,11 +5135,10 @@ mod tests {
 
         restore_env_var("HOME", original_home);
         restore_env_var("CLAW_CONFIG_HOME", original_config_home);
-        restore_env_var("CLAUDE_CONFIG_DIR", original_claude_config_dir);
         let _ = fs::remove_dir_all(workspace);
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(ignored_home);
-        let _ = fs::remove_dir_all(ignored_claude_config);
+        let _ = fs::remove_dir_all(ignored_legacy_config);
     }
 
     #[test]
@@ -5439,7 +5423,7 @@ mod tests {
         assert!(report.contains(&install_root.display().to_string()));
 
         let roots = vec![SkillRoot {
-            source: DefinitionSource::UserCodexHome,
+            source: DefinitionSource::UserClawConfigHome,
             path: install_root.clone(),
             origin: SkillOrigin::SkillsDir,
         }];

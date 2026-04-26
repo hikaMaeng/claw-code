@@ -12,7 +12,7 @@ This note records which Claude Code-style feature surfaces are implemented in th
 | Slash command markdown | Partial | Loaded as legacy command skills from `.claw/commands`; not top-level custom slash dispatch |
 | Agents | Implemented | `<project>/.claw/agents`, `$CLAW_CONFIG_HOME/agents` |
 | Hooks | Partial | `PreToolUse`, `PostToolUse`, `PostToolUseFailure` only |
-| Claude rule directories | Not implemented | No `.claude/rules`, `.claude/rule`, `.claw/rules`, or `.claw/rule` loader |
+| Claude rule directories | Not implemented | No legacy rule-directory loader |
 | Project memory | Partial | `CLAUDE.md`, `CLAUDE.local.md`, `.claw/CLAUDE.md`, `.claw/instructions.md` only |
 | MCP servers | Implemented through settings | Merged by runtime config loader |
 | Plugins | Partial | Tools/resources/hooks/lifecycle supported; Claude plugin skills, agents, MCP imports, and directory-glob commands rejected |
@@ -58,12 +58,7 @@ Claude Code lifecycle hooks such as `SessionStart` are not accepted by plugin ma
 
 Claude-style rule directories are not implemented.
 
-The code search found no loader for these paths:
-
-- `.claude/rules`
-- `.claude/rule`
-- `.claw/rules`
-- `.claw/rule`
+The code search found no rule-directory loader.
 
 Existing `rules` references in the Rust runtime are permission rules or test fixture text, not Claude rule-file support. The implemented permission settings are `permissions.allow`, `permissions.deny`, `permissions.ask`, and `permissions.defaultMode`.
 

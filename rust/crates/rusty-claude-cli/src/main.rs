@@ -9302,7 +9302,7 @@ mod tests {
     }
 
     fn write_plugin_fixture(root: &Path, name: &str, include_hooks: bool, include_lifecycle: bool) {
-        fs::create_dir_all(root.join(".claude-plugin")).expect("manifest dir");
+        fs::create_dir_all(root.join(".claw-plugin")).expect("manifest dir");
         if include_hooks {
             fs::create_dir_all(root.join("hooks")).expect("hooks dir");
             fs::write(
@@ -9336,7 +9336,7 @@ mod tests {
             ""
         };
         fs::write(
-            root.join(".claude-plugin").join("plugin.json"),
+            root.join(".claw-plugin").join("plugin.json"),
             format!(
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"description\": \"runtime plugin fixture\"{hooks}{lifecycle}\n}}"
             ),

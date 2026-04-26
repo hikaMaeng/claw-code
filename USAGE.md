@@ -249,7 +249,7 @@ The name "codex" appears in the Claw Code ecosystem but it does **not** refer to
 
 - **`oh-my-codex` (OmX)** is the workflow and plugin layer that sits on top of `claw`. It provides planning modes, parallel multi-agent execution, notification routing, and other automation features. See [PHILOSOPHY.md](./PHILOSOPHY.md) and the [oh-my-codex repo](https://github.com/Yeachan-Heo/oh-my-codex).
 - **`.codex/` directories** are not part of the active runtime lookup policy. Skills, agents, commands, settings, and sessions use only the two `.claw` tiers described below.
-- **`CODEX_HOME`** and **`CLAUDE_CONFIG_DIR`** are ignored by the active skill/agent/config lookup path.
+- **`CODEX_HOME`** and other legacy assistant config homes are ignored by the active skill/agent/config lookup path.
 
 `claw` does **not** support OpenAI Codex sessions, the Codex CLI, or Codex session import/export. If you need to use OpenAI models (like GPT-4.1), configure the OpenAI-compatible provider as shown above in the [OpenAI-compatible endpoint](#openai-compatible-endpoint) and [OpenRouter](#openrouter) sections.
 
@@ -333,7 +333,7 @@ Runtime config is loaded in this order, with later entries overriding earlier on
 1. `$CLAW_CONFIG_HOME/settings.json` (or `$HOME/.claw/settings.json` when `CLAW_CONFIG_HOME` is unset)
 2. `<repo>/.claw/settings.json`
 
-No `.claw.json`, `.claude`, `.codex`, `.config/claw`, or `settings.local.json` files are loaded by the runtime config loader.
+No `.claw.json`, legacy assistant homes, `.codex`, `.config/claw`, or `settings.local.json` files are loaded by the runtime config loader.
 
 ## Skills, agents, commands, and Docker home
 

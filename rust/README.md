@@ -123,7 +123,7 @@ Runtime config has exactly two active tiers:
 1. `$CLAW_CONFIG_HOME/settings.json`, defaulting to `$HOME/.claw/settings.json`
 2. `<project>/.claw/settings.json`
 
-The runtime does not load `.claw.json`, `.claude`, `.codex`, `.config/claw`, or `settings.local.json` as config sources. Managed sessions are also stored under `$CLAW_CONFIG_HOME/sessions/<workspace_hash>/`, so Docker deployments can keep all global state in `/home/claw/.claw` while project overrides stay in `/workspace/.claw`.
+The runtime does not load `.claw.json`, legacy assistant homes, `.codex`, `.config/claw`, or `settings.local.json` as config sources. Managed sessions are also stored under `$CLAW_CONFIG_HOME/sessions/<workspace_hash>/`, so Docker deployments can keep all global state in `/home/claw/.claw` while project overrides stay in `/workspace/.claw`.
 
 ## CLI Flags and Commands
 

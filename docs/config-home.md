@@ -9,7 +9,7 @@ Claw Code uses a two-tier `.claw` policy for runtime state and project overrides
 | Global | `$CLAW_CONFIG_HOME/settings.json` or `$HOME/.claw/settings.json` | Providers, model registry, installed skills, slash commands, agents, plugins, sessions, user defaults |
 | Project | `<project>/.claw/settings.json` | Project-specific overrides |
 
-The runtime config loader does not load `.claw.json`, `.claude`, `.codex`, `.config/claw`, or `.claw/settings.local.json`.
+The runtime config loader does not load `.claw.json`, legacy assistant homes, `.codex`, `.config/claw`, or `.claw/settings.local.json`.
 
 ## Runtime State
 
@@ -67,4 +67,4 @@ Lookup paths:
 
 For duplicate skill, slash-command, or agent names, project definitions stay active and global definitions are reported as shadowed.
 
-Claude-style rule directories such as `.claude/rules` are not implemented in this runtime and are outside the current two-tier definition cascade.
+Legacy assistant rule directories are not implemented in this runtime and are outside the current two-tier definition cascade.
