@@ -50,6 +50,8 @@ Precedence:
 
 This applies to `claw prompt`, `claw -p`, shorthand prompt mode, piped prompts, and slash-command paths that invoke a prompt.
 
+The REPL `Connected: <model> via <provider>` line reports the provider kind from the constructed runtime client. For models declared in `models`, this means the label follows the linked `providers.<name>.type` value instead of guessing from the model name.
+
 ## Definition Cascade
 
 Skills, slash-command markdown, and agents use the same two tiers:

@@ -1555,7 +1555,11 @@ fn provider_label(kind: ProviderKind) -> &'static str {
 }
 
 fn format_connected_line(model: &str) -> String {
-    let provider = provider_label(detect_provider_kind(model));
+    format_connected_line_with_provider(model, detect_provider_kind(model))
+}
+
+fn format_connected_line_with_provider(model: &str, provider_kind: ProviderKind) -> String {
+    let provider = provider_label(provider_kind);
     format!("Connected: {model} via {provider}")
 }
 
@@ -3528,7 +3532,7 @@ fn run_repl(
     let mut editor =
         input::LineEditor::new("> ", cli.repl_completion_candidates().unwrap_or_default());
     println!("{}", cli.startup_banner());
-    println!("{}", format_connected_line(&cli.model));
+    println!("{}", cli.connected_line());
 
     loop {
         editor.set_completions(cli.repl_completion_candidates().unwrap_or_default());
@@ -4122,6 +4126,13 @@ impl LiveCli {
         if let Some(rt) = self.runtime.runtime.as_mut() {
             rt.api_client_mut().set_reasoning_effort(effort);
         }
+    }
+
+    fn connected_line(&self) -> String {
+        format_connected_line_with_provider(
+            &self.model,
+            self.runtime.api_client().provider_kind(),
+        )
     }
 
     fn startup_banner(&self) -> String {
@@ -7418,6 +7429,11 @@ struct AnthropicRuntimeClient {
 }
 
 impl AnthropicRuntimeClient {
+    #[must_use]
+    fn provider_kind(&self) -> ProviderKind {
+        self.client.provider_kind()
+    }
+
     fn new(
         session_id: &str,
         model: String,
@@ -11461,6 +11477,57 @@ mod tests {
         let line = format_connected_line(model);
 
         assert_eq!(line, "Connected: grok-3 via xai");
+    }
+
+    #[test]
+    fn live_cli_connected_line_uses_settings_provider_type() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("workspace");
+        let config_home = root.join("home").join(".claw");
+        fs::create_dir_all(&cwd).expect("workspace dir");
+        fs::create_dir_all(&config_home).expect("config home dir");
+        fs::write(
+            config_home.join("settings.json"),
+            r#"{
+              "model": "qwen3.6-27b:mp",
+              "providers": {
+                "lmstudio": {
+                  "type": "openai",
+                  "url": "http://192.168.0.6:12345/v1"
+                }
+              },
+              "models": [
+                {
+                  "name": "qwen3.6-27b:mp",
+                  "provider": "lmstudio",
+                  "maxContext": 262000
+                }
+              ]
+            }"#,
+        )
+        .expect("write settings");
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+
+        let line = with_current_dir(&cwd, || {
+            let cli = LiveCli::new(
+                "qwen3.6-27b:mp".to_string(),
+                true,
+                None,
+                PermissionMode::DangerFullAccess,
+            )
+            .expect("cli should initialize with settings provider");
+            cli.connected_line()
+        });
+
+        assert_eq!(line, "Connected: qwen3.6-27b:mp via openai");
+
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        fs::remove_dir_all(root).expect("cleanup temp dir");
     }
 
     #[test]
