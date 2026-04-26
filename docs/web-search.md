@@ -246,7 +246,6 @@ claw의 cascading 설정 구조를 따른다:
 ```
 ~/.claw/settings.json          ← 전역 (모든 워크스페이스에 적용)
 {project}/.claw/settings.json  ← 프로젝트별 (전역을 덮어씀)
-{project}/.claw/settings.local.json  ← 로컬 (git에 커밋하지 않는 값)
 ```
 
 ### 스키마
@@ -706,7 +705,6 @@ claw의 기존 cascading 체계를 그대로 따른다:
 
 ```
 우선순위 높음
-  {project}/.claw/settings.local.json  ← 로컬 전용 (git 제외)
   {project}/.claw/settings.json        ← 프로젝트별
   ~/.claw/settings.json                ← 전역
 우선순위 낮음

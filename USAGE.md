@@ -54,7 +54,7 @@ cd rust
 
 ### Initialize a repository
 
-Set up a new repository with `.claw` config, `.claw.json`, `.gitignore` entries, and a `CLAUDE.md` guidance file:
+Set up a new repository with `.claw/settings.json`, `.gitignore` entries, and a `CLAUDE.md` guidance file:
 
 ```bash
 cd /path/to/your/repo
@@ -246,8 +246,8 @@ Automatic compaction uses `models[].maxContext`. The trigger is calculated at ro
 The name "codex" appears in the Claw Code ecosystem but it does **not** refer to OpenAI Codex (the code-generation model). Here is what it means in this project:
 
 - **`oh-my-codex` (OmX)** is the workflow and plugin layer that sits on top of `claw`. It provides planning modes, parallel multi-agent execution, notification routing, and other automation features. See [PHILOSOPHY.md](./PHILOSOPHY.md) and the [oh-my-codex repo](https://github.com/Yeachan-Heo/oh-my-codex).
-- **`.codex/` directories** (e.g. `.codex/skills`, `.codex/agents`, `.codex/commands`) are legacy lookup paths that `claw` still scans alongside the primary `.claw/` directories.
-- **`CODEX_HOME`** is an optional environment variable that points to a custom root for user-level skill and command lookups.
+- **`.codex/` directories** are not part of the active runtime lookup policy. Skills, agents, commands, settings, and sessions use only the two `.claw` tiers described below.
+- **`CODEX_HOME`** and **`CLAUDE_CONFIG_DIR`** are ignored by the active skill/agent/config lookup path.
 
 `claw` does **not** support OpenAI Codex sessions, the Codex CLI, or Codex session import/export. If you need to use OpenAI models (like GPT-4.1), configure the OpenAI-compatible provider as shown above in the [OpenAI-compatible endpoint](#openai-compatible-endpoint) and [OpenRouter](#openrouter) sections.
 
@@ -308,7 +308,13 @@ cd rust
 
 ## Session management
 
-REPL turns are persisted under `.claw/sessions/` in the current workspace.
+REPL turns are persisted under the global config home, namespaced by workspace fingerprint:
+
+```text
+$CLAW_CONFIG_HOME/sessions/<workspace_hash>/
+```
+
+When `CLAW_CONFIG_HOME` is unset, it defaults to `$HOME/.claw`.
 
 ```bash
 cd rust
@@ -322,11 +328,29 @@ Useful interactive commands include `/help`, `/status`, `/cost`, `/config`, `/se
 
 Runtime config is loaded in this order, with later entries overriding earlier ones:
 
-1. `~/.claw.json`
-2. `~/.config/claw/settings.json`
-3. `<repo>/.claw.json`
-4. `<repo>/.claw/settings.json`
-5. `<repo>/.claw/settings.local.json`
+1. `$CLAW_CONFIG_HOME/settings.json` (or `$HOME/.claw/settings.json` when `CLAW_CONFIG_HOME` is unset)
+2. `<repo>/.claw/settings.json`
+
+No `.claw.json`, `.claude`, `.codex`, `.config/claw`, or `settings.local.json` files are loaded by the runtime config loader.
+
+## Skills, agents, commands, and Docker home
+
+The active lookup tiers are also limited to:
+
+1. `$CLAW_CONFIG_HOME/{skills,commands,agents}`
+2. `<repo>/.claw/{skills,commands,agents}`
+
+For the Docker stack at `F:\desktop\docker\crawcode`, mount only one global home:
+
+```yaml
+volumes:
+  - ./workspace:/workspace
+  - ./claw-home/.claw:/home/claw/.claw
+environment:
+  CLAW_CONFIG_HOME: /home/claw/.claw
+```
+
+Project-specific overrides belong in `./workspace/.claw/settings.json`; global providers, models, plugins, sessions, and installed skills belong in `./claw-home/.claw/`.
 
 ## Mock parity harness
 

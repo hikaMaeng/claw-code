@@ -66,7 +66,7 @@ const DEFAULT_MODEL: &str = "claude-opus-4-6";
 enum ModelSource {
     /// Explicit `--model` / `--model=` CLI flag.
     Flag,
-    /// `model` key in `.claw.json` / `.claw/settings.json` when no flag set it.
+    /// `model` key in `$CLAW_CONFIG_HOME/settings.json` or `.claw/settings.json` when no flag set it.
     Config,
     /// Compiled-in DEFAULT_MODEL fallback.
     Default,
@@ -876,7 +876,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             })
         }
         // #146: `config` is pure-local read-only introspection (merges
-        // `.claw.json` + `.claw/settings.json` from disk, no network, no
+        // `$CLAW_CONFIG_HOME/settings.json` + `.claw/settings.json` from disk, no network, no
         // state mutation). Previously callers had to spin up a session with
         // `claw --resume SESSION.jsonl /config` to see their own config,
         // which is synthetic friction. Accepts an optional section name
@@ -2749,7 +2749,7 @@ struct StatusContext {
     git_branch: Option<String>,
     git_summary: GitWorkspaceSummary,
     sandbox_status: runtime::SandboxStatus,
-    /// #143: when `.claw.json` (or another loaded config file) fails to parse,
+    /// #143: when a loaded `settings.json` file fails to parse,
     /// we capture the parse error here and still populate every field that
     /// doesn't depend on runtime config (workspace, git, sandbox defaults,
     /// discovery counts). Top-level JSON output then reports
@@ -5179,7 +5179,8 @@ fn sessions_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 fn current_session_store() -> Result<runtime::SessionStore, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
-    runtime::SessionStore::from_cwd(&cwd).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    runtime::SessionStore::from_data_dir(runtime::default_config_home(), &cwd)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 fn new_cli_session() -> Result<Session, Box<dyn std::error::Error>> {
@@ -5780,7 +5781,7 @@ fn render_help_topic(topic: LocalHelpTopic) -> String {
             .to_string(),
         LocalHelpTopic::Init => "Init
   Usage            claw init [--output-format <format>]
-  Purpose          create .claw/, .claw.json, .gitignore, and CLAUDE.md in the current project
+  Purpose          create .claw/, .gitignore, and CLAUDE.md in the current project
   Output           list of created vs. skipped files (idempotent: safe to re-run)
   Formats          text (default), json
   Related          claw status · claw doctor"
@@ -10201,10 +10202,10 @@ mod tests {
         let _guard = env_lock();
         let root = temp_dir();
         let cwd = root.join("project-with-malformed-mcp");
-        std::fs::create_dir_all(&cwd).expect("project dir should exist");
+        std::fs::create_dir_all(cwd.join(".claw")).expect("project config dir should exist");
         // One valid server + one malformed entry missing `command`.
         std::fs::write(
-            cwd.join(".claw.json"),
+            cwd.join(".claw").join("settings.json"),
             r#"{
   "mcpServers": {
     "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]},
@@ -10213,7 +10214,7 @@ mod tests {
 }
 "#,
         )
-        .expect("write malformed .claw.json");
+        .expect("write malformed project settings");
 
         let context = with_current_dir(&cwd, || {
             super::status_context(None)

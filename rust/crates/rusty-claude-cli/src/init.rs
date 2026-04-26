@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const STARTER_CLAW_JSON: &str = concat!(
+const STARTER_SETTINGS_JSON: &str = concat!(
     "{\n",
     "  \"permissions\": {\n",
     "    \"defaultMode\": \"dontAsk\"\n",
@@ -9,7 +9,7 @@ const STARTER_CLAW_JSON: &str = concat!(
     "}\n",
 );
 const GITIGNORE_COMMENT: &str = "# Claw Code local artifacts";
-const GITIGNORE_ENTRIES: [&str; 3] = [".claw/settings.local.json", ".claw/sessions/", ".clawhip/"];
+const GITIGNORE_ENTRIES: [&str; 2] = [".claw/tool-state/", ".clawhip/"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InitStatus {
@@ -128,10 +128,10 @@ pub(crate) fn initialize_repo(cwd: &Path) -> Result<InitReport, Box<dyn std::err
         status: ensure_dir(&claw_dir)?,
     });
 
-    let claw_json = cwd.join(".claw.json");
+    let settings_json = claw_dir.join("settings.json");
     artifacts.push(InitArtifact {
-        name: ".claw.json",
-        status: write_file_if_missing(&claw_json, STARTER_CLAW_JSON)?,
+        name: ".claw/settings.json",
+        status: write_file_if_missing(&settings_json, STARTER_SETTINGS_JSON)?,
     });
 
     let gitignore = cwd.join(".gitignore");
@@ -251,7 +251,7 @@ pub(crate) fn render_init_claude_md(cwd: &Path) -> String {
 
     lines.push("## Working agreement".to_string());
     lines.push("- Prefer small, reviewable changes and keep generated bootstrap files aligned with actual repo workflows.".to_string());
-    lines.push("- Keep shared defaults in `.claw.json`; reserve `.claw/settings.local.json` for machine-local overrides.".to_string());
+    lines.push("- Keep global defaults in `$CLAW_CONFIG_HOME/settings.json`; keep project-specific overrides in `.claw/settings.json`.".to_string());
     lines.push("- Do not overwrite existing `CLAUDE.md` content automatically; update it intentionally when repo workflows change.".to_string());
     lines.push(String::new());
 
@@ -397,15 +397,16 @@ mod tests {
         let report = initialize_repo(&root).expect("init should succeed");
         let rendered = report.render();
         assert!(rendered.contains(".claw/"));
-        assert!(rendered.contains(".claw.json"));
+        assert!(rendered.contains(".claw/settings.json"));
         assert!(rendered.contains("created"));
         assert!(rendered.contains(".gitignore       created"));
         assert!(rendered.contains("CLAUDE.md        created"));
         assert!(root.join(".claw").is_dir());
-        assert!(root.join(".claw.json").is_file());
+        assert!(root.join(".claw").join("settings.json").is_file());
         assert!(root.join("CLAUDE.md").is_file());
         assert_eq!(
-            fs::read_to_string(root.join(".claw.json")).expect("read claw json"),
+            fs::read_to_string(root.join(".claw").join("settings.json"))
+                .expect("read settings json"),
             concat!(
                 "{\n",
                 "  \"permissions\": {\n",
@@ -415,8 +416,7 @@ mod tests {
             )
         );
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
-        assert!(gitignore.contains(".claw/settings.local.json"));
-        assert!(gitignore.contains(".claw/sessions/"));
+        assert!(gitignore.contains(".claw/tool-state/"));
         assert!(gitignore.contains(".clawhip/"));
         let claude_md = fs::read_to_string(root.join("CLAUDE.md")).expect("read claude md");
         assert!(claude_md.contains("Languages: Rust."));
@@ -430,7 +430,7 @@ mod tests {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("CLAUDE.md"), "custom guidance\n").expect("write existing claude md");
-        fs::write(root.join(".gitignore"), ".claw/settings.local.json\n").expect("write gitignore");
+        fs::write(root.join(".gitignore"), ".claw/tool-state/\n").expect("write gitignore");
 
         let first = initialize_repo(&root).expect("first init should succeed");
         assert!(first
@@ -439,7 +439,7 @@ mod tests {
         let second = initialize_repo(&root).expect("second init should succeed");
         let second_rendered = second.render();
         assert!(second_rendered.contains(".claw/"));
-        assert!(second_rendered.contains(".claw.json"));
+        assert!(second_rendered.contains(".claw/settings.json"));
         assert!(second_rendered.contains("skipped (already exists)"));
         assert!(second_rendered.contains(".gitignore       skipped (already exists)"));
         assert!(second_rendered.contains("CLAUDE.md        skipped (already exists)"));
@@ -448,8 +448,7 @@ mod tests {
             "custom guidance\n"
         );
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
-        assert_eq!(gitignore.matches(".claw/settings.local.json").count(), 1);
-        assert_eq!(gitignore.matches(".claw/sessions/").count(), 1);
+        assert_eq!(gitignore.matches(".claw/tool-state/").count(), 1);
         assert_eq!(gitignore.matches(".clawhip/").count(), 1);
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
@@ -469,7 +468,7 @@ mod tests {
             created_names,
             vec![
                 ".claw/".to_string(),
-                ".claw.json".to_string(),
+                ".claw/settings.json".to_string(),
                 ".gitignore".to_string(),
                 "CLAUDE.md".to_string(),
             ],
@@ -486,7 +485,7 @@ mod tests {
             skipped_names,
             vec![
                 ".claw/".to_string(),
-                ".claw.json".to_string(),
+                ".claw/settings.json".to_string(),
                 ".gitignore".to_string(),
                 "CLAUDE.md".to_string(),
             ],

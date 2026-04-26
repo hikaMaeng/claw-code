@@ -130,10 +130,10 @@ fn resumed_config_command_loads_settings_files_end_to_end() {
     fs::write(config_home.join("settings.json"), r#"{"model":"haiku"}"#)
         .expect("user config should write");
     fs::write(
-        project_dir.join(".claw").join("settings.local.json"),
+        project_dir.join(".claw").join("settings.json"),
         r#"{"model":"opus"}"#,
     )
-    .expect("local config should write");
+    .expect("project config should write");
 
     // when
     let output = run_claw_with_env(
@@ -167,7 +167,7 @@ fn resumed_config_command_loads_settings_files_end_to_end() {
     assert!(stdout.contains(
         project_dir
             .join(".claw")
-            .join("settings.local.json")
+            .join("settings.json")
             .to_str()
             .expect("utf8 path")
     ));
@@ -182,7 +182,9 @@ fn resume_latest_restores_the_most_recent_managed_session() {
     let project_dir = temp_dir.join("project");
     fs::create_dir_all(&project_dir).expect("project dir should exist");
     let project_dir = fs::canonicalize(&project_dir).unwrap_or(project_dir);
-    let store = runtime::SessionStore::from_cwd(&project_dir).expect("session store should build");
+    let config_home = temp_dir.join("home").join(".claw");
+    let store = runtime::SessionStore::from_data_dir(&config_home, &project_dir)
+        .expect("session store should build");
     let older_path = store.create_handle("session-older").path;
     let newer_path = store.create_handle("session-newer").path;
 
@@ -206,7 +208,11 @@ fn resume_latest_restores_the_most_recent_managed_session() {
         .expect("newer session should persist");
 
     // when
-    let output = run_claw(&project_dir, &["--resume", "latest", "/status"]);
+    let output = run_claw_with_env(
+        &project_dir,
+        &["--resume", "latest", "/status"],
+        &[("CLAW_CONFIG_HOME", config_home.to_str().expect("utf8 path"))],
+    );
 
     // then
     assert!(

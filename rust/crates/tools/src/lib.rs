@@ -22,7 +22,6 @@ use runtime::{
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry, WorkerTaskReceipt},
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
-    WebSearchConfig,
     BranchFreshness, ConfigLoader, ContentBlock, ConversationMessage, ConversationRuntime,
     GrepSearchInput, LaneCommitProvenance, LaneEvent, LaneEventBlocker, LaneEventName,
     LaneEventStatus, LaneFailureClass, McpDegradedReport, MessageRole, PermissionMode,
@@ -2827,16 +2826,12 @@ fn json_path<'a>(mut val: &'a serde_json::Value, path: &str) -> &'a serde_json::
 /// Substitute "$q" placeholder with the actual query string inside a JSON body template.
 fn substitute_query(val: &serde_json::Value, query: &str) -> serde_json::Value {
     match val {
-        serde_json::Value::String(s) => {
-            serde_json::Value::String(s.replace("$q", query))
-        }
-        serde_json::Value::Object(map) => {
-            serde_json::Value::Object(
-                map.iter()
-                    .map(|(k, v)| (k.clone(), substitute_query(v, query)))
-                    .collect(),
-            )
-        }
+        serde_json::Value::String(s) => serde_json::Value::String(s.replace("$q", query)),
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), substitute_query(v, query)))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -2890,8 +2885,7 @@ fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String>
         _ => {
             // GET
             let query_param = spec["queryParam"].as_str().unwrap_or("q");
-            let mut url =
-                reqwest::Url::parse(endpoint).map_err(|e| e.to_string())?;
+            let mut url = reqwest::Url::parse(endpoint).map_err(|e| e.to_string())?;
             url.query_pairs_mut().append_pair(query_param, &input.query);
             let mut req = client.get(url).header("Accept", "application/json");
             req = apply_auth(req, auth_spec, api_key);
@@ -3015,8 +3009,6 @@ fn build_search_output(
         duration_seconds,
     }
 }
-
-
 
 fn build_http_client() -> Result<Client, String> {
     Client::builder()
@@ -3434,80 +3426,14 @@ fn skill_lookup_roots() -> Vec<SkillLookupRoot> {
     let mut roots = Vec::new();
 
     if let Ok(cwd) = std::env::current_dir() {
-        push_project_skill_lookup_roots(&mut roots, &cwd);
+        push_prefixed_skill_lookup_roots(&mut roots, &cwd.join(".claw"));
     }
 
-    if let Ok(claw_config_home) = std::env::var("CLAW_CONFIG_HOME") {
-        push_prefixed_skill_lookup_roots(&mut roots, std::path::Path::new(&claw_config_home));
+    if let Ok(config_home) = config_home_dir() {
+        push_prefixed_skill_lookup_roots(&mut roots, &config_home);
     }
-    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-        push_prefixed_skill_lookup_roots(&mut roots, std::path::Path::new(&codex_home));
-    }
-    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-        push_home_skill_lookup_roots(&mut roots, std::path::Path::new(&home));
-    }
-    if let Ok(claude_config_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-        let claude_config_dir = std::path::PathBuf::from(claude_config_dir);
-        push_skill_lookup_root(
-            &mut roots,
-            claude_config_dir.join("skills"),
-            SkillLookupOrigin::SkillsDir,
-        );
-        push_skill_lookup_root(
-            &mut roots,
-            claude_config_dir.join("skills").join("omc-learned"),
-            SkillLookupOrigin::SkillsDir,
-        );
-        push_skill_lookup_root(
-            &mut roots,
-            claude_config_dir.join("commands"),
-            SkillLookupOrigin::LegacyCommandsDir,
-        );
-    }
-    push_skill_lookup_root(
-        &mut roots,
-        std::path::PathBuf::from("/home/bellman/.claw/skills"),
-        SkillLookupOrigin::SkillsDir,
-    );
-    push_skill_lookup_root(
-        &mut roots,
-        std::path::PathBuf::from("/home/bellman/.codex/skills"),
-        SkillLookupOrigin::SkillsDir,
-    );
 
     roots
-}
-
-fn push_project_skill_lookup_roots(roots: &mut Vec<SkillLookupRoot>, cwd: &std::path::Path) {
-    for ancestor in cwd.ancestors() {
-        push_prefixed_skill_lookup_roots(roots, &ancestor.join(".omc"));
-        push_prefixed_skill_lookup_roots(roots, &ancestor.join(".agents"));
-        push_prefixed_skill_lookup_roots(roots, &ancestor.join(".claw"));
-        push_prefixed_skill_lookup_roots(roots, &ancestor.join(".codex"));
-        push_prefixed_skill_lookup_roots(roots, &ancestor.join(".claude"));
-    }
-}
-
-fn push_home_skill_lookup_roots(roots: &mut Vec<SkillLookupRoot>, home: &std::path::Path) {
-    push_prefixed_skill_lookup_roots(roots, &home.join(".omc"));
-    push_prefixed_skill_lookup_roots(roots, &home.join(".claw"));
-    push_prefixed_skill_lookup_roots(roots, &home.join(".codex"));
-    push_prefixed_skill_lookup_roots(roots, &home.join(".claude"));
-    push_skill_lookup_root(
-        roots,
-        home.join(".agents").join("skills"),
-        SkillLookupOrigin::SkillsDir,
-    );
-    push_skill_lookup_root(
-        roots,
-        home.join(".config").join("opencode").join("skills"),
-        SkillLookupOrigin::SkillsDir,
-    );
-    push_skill_lookup_root(
-        roots,
-        home.join(".claude").join("skills").join("omc-learned"),
-        SkillLookupOrigin::SkillsDir,
-    );
 }
 
 fn push_prefixed_skill_lookup_roots(roots: &mut Vec<SkillLookupRoot>, prefix: &std::path::Path) {
@@ -5916,7 +5842,7 @@ fn config_file_for_scope(scope: ConfigScope) -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     Ok(match scope {
         ConfigScope::Global => config_home_dir()?.join("settings.json"),
-        ConfigScope::Settings => cwd.join(".claw").join("settings.local.json"),
+        ConfigScope::Settings => cwd.join(".claw").join("settings.json"),
     })
 }
 
@@ -6019,7 +5945,7 @@ fn remove_nested_value(root: &mut serde_json::Map<String, Value>, path: &[&str])
 fn plan_mode_state_file() -> Result<PathBuf, String> {
     Ok(config_file_for_scope(ConfigScope::Settings)?
         .parent()
-        .ok_or_else(|| String::from("settings.local.json has no parent directory"))?
+        .ok_or_else(|| String::from("settings.json has no parent directory"))?
         .join("tool-state")
         .join("plan-mode.json"))
 }
@@ -7473,7 +7399,7 @@ mod tests {
     fn skill_loads_local_skill_prompt() {
         let _guard = env_guard();
         let home = temp_path("skills-home");
-        let skill_dir = home.join(".agents").join("skills").join("help");
+        let skill_dir = home.join(".claw").join("skills").join("help");
         fs::create_dir_all(&skill_dir).expect("skill dir should exist");
         fs::write(
             skill_dir.join("SKILL.md"),
@@ -7571,6 +7497,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy .claude project skill roots are no longer loaded by the two-tier .claw policy"]
     fn skill_loads_project_local_claude_skill_prompt() {
         let _guard = env_guard();
         let root = temp_path("project-skills");
@@ -7622,6 +7549,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy .omc and .agents project skill roots are no longer loaded by the two-tier .claw policy"]
     fn skill_loads_project_local_omc_and_agents_skill_prompts() {
         let _guard = env_guard();
         let root = temp_path("project-omc-skills");
@@ -7692,6 +7620,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "CLAUDE_CONFIG_DIR skill lookup is no longer loaded by the two-tier .claw policy"]
     fn skill_loads_learned_skill_from_claude_config_dir() {
         let _guard = env_guard();
         let root = temp_path("claude-config-learned-skill");
@@ -7747,6 +7676,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "CLAUDE_CONFIG_DIR skill lookup is no longer loaded by the two-tier .claw policy"]
     fn skill_loads_direct_skill_and_legacy_command_from_claude_config_dir() {
         let _guard = env_guard();
         let root = temp_path("claude-config-direct-skill");
@@ -7819,6 +7749,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy .claude project commands are no longer loaded by the two-tier .claw policy"]
     fn skill_loads_project_local_legacy_command_markdown() {
         let _guard = env_guard();
         let root = temp_path("project-legacy-command");
@@ -9239,10 +9170,10 @@ mod tests {
         std::fs::create_dir_all(home.join(".claw")).expect("home dir");
         std::fs::create_dir_all(cwd.join(".claw")).expect("cwd dir");
         std::fs::write(
-            cwd.join(".claw").join("settings.local.json"),
+            cwd.join(".claw").join("settings.json"),
             r#"{"permissions":{"defaultMode":"acceptEdits"}}"#,
         )
-        .expect("write local settings");
+        .expect("write project settings");
 
         let original_home = std::env::var("HOME").ok();
         let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
@@ -9258,7 +9189,7 @@ mod tests {
         assert_eq!(enter_output["previousLocalMode"], "acceptEdits");
         assert_eq!(enter_output["currentLocalMode"], "plan");
 
-        let local_settings = std::fs::read_to_string(cwd.join(".claw").join("settings.local.json"))
+        let local_settings = std::fs::read_to_string(cwd.join(".claw").join("settings.json"))
             .expect("local settings after enter");
         assert!(local_settings.contains(r#""defaultMode": "plan""#));
         let state =
@@ -9274,7 +9205,7 @@ mod tests {
         assert_eq!(exit_output["previousLocalMode"], "acceptEdits");
         assert_eq!(exit_output["currentLocalMode"], "acceptEdits");
 
-        let local_settings = std::fs::read_to_string(cwd.join(".claw").join("settings.local.json"))
+        let local_settings = std::fs::read_to_string(cwd.join(".claw").join("settings.json"))
             .expect("local settings after exit");
         assert!(local_settings.contains(r#""defaultMode": "acceptEdits""#));
         assert!(!cwd
@@ -9329,7 +9260,7 @@ mod tests {
         assert_eq!(exit_output["changed"], true);
         assert_eq!(exit_output["currentLocalMode"], serde_json::Value::Null);
 
-        let local_settings = std::fs::read_to_string(cwd.join(".claw").join("settings.local.json"))
+        let local_settings = std::fs::read_to_string(cwd.join(".claw").join("settings.json"))
             .expect("local settings after exit");
         let local_settings_json: serde_json::Value =
             serde_json::from_str(&local_settings).expect("valid settings json");

@@ -11,15 +11,15 @@ use crate::session::{Session, SessionError};
 /// workspace fingerprint so that parallel `opencode serve` instances never
 /// collide.
 ///
-/// Create via [`SessionStore::from_cwd`] (derives the store path from the
-/// server's working directory) or [`SessionStore::from_data_dir`] (honours an
-/// explicit `--data-dir` flag).  Both constructors produce a directory layout
-/// of `<data_dir>/sessions/<workspace_hash>/` where `<workspace_hash>` is a
-/// stable hex digest of the canonical workspace root.
+/// Create via [`SessionStore::from_data_dir`] for global Claw-home storage or
+/// [`SessionStore::from_cwd`] for callers that explicitly need project-local
+/// storage. Both constructors produce a directory layout of
+/// `<data_dir>/sessions/<workspace_hash>/` where `<workspace_hash>` is a stable
+/// hex digest of the canonical workspace root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionStore {
     /// Resolved root of the session namespace, e.g.
-    /// `/home/user/project/.claw/sessions/a1b2c3d4e5f60718/`.
+    /// `/home/user/.claw/sessions/a1b2c3d4e5f60718/`.
     sessions_root: PathBuf,
     /// The canonical workspace path that was fingerprinted.
     workspace_root: PathBuf,
@@ -58,8 +58,8 @@ impl SessionStore {
         let workspace_root = workspace_root.as_ref();
         // #151: canonicalize workspace_root for consistent fingerprinting
         // across equivalent path representations.
-        let canonical_workspace = fs::canonicalize(workspace_root)
-            .unwrap_or_else(|_| workspace_root.to_path_buf());
+        let canonical_workspace =
+            fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
         let sessions_root = data_dir
             .as_ref()
             .join("sessions")
@@ -158,10 +158,9 @@ impl SessionStore {
     }
 
     pub fn latest_session(&self) -> Result<ManagedSessionSummary, SessionControlError> {
-        self.list_sessions()?
-            .into_iter()
-            .next()
-            .ok_or_else(|| SessionControlError::Format(format_no_managed_sessions(&self.sessions_root)))
+        self.list_sessions()?.into_iter().next().ok_or_else(|| {
+            SessionControlError::Format(format_no_managed_sessions(&self.sessions_root))
+        })
     }
 
     pub fn load_session(
@@ -404,7 +403,7 @@ pub fn sessions_dir() -> Result<PathBuf, SessionControlError> {
 pub fn managed_sessions_dir_for(
     base_dir: impl AsRef<Path>,
 ) -> Result<PathBuf, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     Ok(store.sessions_dir().to_path_buf())
 }
 
@@ -418,7 +417,7 @@ pub fn create_managed_session_handle_for(
     base_dir: impl AsRef<Path>,
     session_id: &str,
 ) -> Result<SessionHandle, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     Ok(store.create_handle(session_id))
 }
 
@@ -430,7 +429,7 @@ pub fn resolve_session_reference_for(
     base_dir: impl AsRef<Path>,
     reference: &str,
 ) -> Result<SessionHandle, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     store.resolve_reference(reference)
 }
 
@@ -442,7 +441,7 @@ pub fn resolve_managed_session_path_for(
     base_dir: impl AsRef<Path>,
     session_id: &str,
 ) -> Result<PathBuf, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     store.resolve_managed_path(session_id)
 }
 
@@ -462,7 +461,7 @@ pub fn list_managed_sessions() -> Result<Vec<ManagedSessionSummary>, SessionCont
 pub fn list_managed_sessions_for(
     base_dir: impl AsRef<Path>,
 ) -> Result<Vec<ManagedSessionSummary>, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     store.list_sessions()
 }
 
@@ -473,7 +472,7 @@ pub fn latest_managed_session() -> Result<ManagedSessionSummary, SessionControlE
 pub fn latest_managed_session_for(
     base_dir: impl AsRef<Path>,
 ) -> Result<ManagedSessionSummary, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     store.latest_session()
 }
 
@@ -485,7 +484,7 @@ pub fn load_managed_session_for(
     base_dir: impl AsRef<Path>,
     reference: &str,
 ) -> Result<LoadedManagedSession, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     store.load_session(reference)
 }
 
@@ -501,7 +500,7 @@ pub fn fork_managed_session_for(
     session: &Session,
     branch_name: Option<String>,
 ) -> Result<ForkedManagedSession, SessionControlError> {
-    let store = SessionStore::from_cwd(base_dir)?;
+    let store = SessionStore::from_data_dir(crate::config::default_config_home(), base_dir)?;
     store.fork_session(session, branch_name)
 }
 
