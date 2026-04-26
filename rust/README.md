@@ -181,6 +181,7 @@ Notable claw-first surfaces now available directly in slash form:
 - `/skills [list|install <path>|help]`
 - `/agents [list|help]`
 - `/mcp [list|show <server>|help]`
+- `/context` for a local context-window report based on session estimates and `models[].maxContext`
 - `/doctor`
 - `/plugin [list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]`
 - `/subagent [list|steer <target> <msg>|kill <id>]`

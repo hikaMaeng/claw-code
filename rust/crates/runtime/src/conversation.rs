@@ -202,6 +202,11 @@ where
     }
 
     #[must_use]
+    pub fn auto_compaction_input_tokens_threshold(&self) -> u32 {
+        self.auto_compaction_input_tokens_threshold
+    }
+
+    #[must_use]
     pub fn with_hook_abort_signal(mut self, hook_abort_signal: HookAbortSignal) -> Self {
         self.hook_abort_signal = hook_abort_signal;
         self

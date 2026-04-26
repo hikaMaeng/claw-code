@@ -365,6 +365,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permission_mode,
             output_format,
         )?,
+        CliAction::Context {
+            model,
+            model_flag_raw,
+            output_format,
+        } => print_context_snapshot(&model, model_flag_raw.as_deref(), output_format)?,
         CliAction::Sandbox { output_format } => print_sandbox_status_snapshot(output_format)?,
         CliAction::Prompt {
             prompt,
@@ -499,6 +504,11 @@ enum CliAction {
         // resolved inside `print_status_snapshot`.
         model_flag_raw: Option<String>,
         permission_mode: PermissionMode,
+        output_format: CliOutputFormat,
+    },
+    Context {
+        model: String,
+        model_flag_raw: Option<String>,
         output_format: CliOutputFormat,
     },
     Sandbox {
@@ -1049,7 +1059,7 @@ fn parse_single_word_command_alias(
     let verb = &rest[0];
     let is_diagnostic = matches!(
         verb.as_str(),
-        "help" | "version" | "status" | "sandbox" | "doctor" | "state"
+        "help" | "version" | "status" | "context" | "sandbox" | "doctor" | "state"
     );
 
     if is_diagnostic && rest.len() > 1 {
@@ -1082,6 +1092,11 @@ fn parse_single_word_command_alias(
             model: model.to_string(),
             model_flag_raw: model_flag_raw.map(str::to_string), // #148
             permission_mode: permission_mode_override.unwrap_or_else(default_permission_mode),
+            output_format,
+        })),
+        "context" => Some(Ok(CliAction::Context {
+            model: model.to_string(),
+            model_flag_raw: model_flag_raw.map(str::to_string),
             output_format,
         })),
         "sandbox" => Some(Ok(CliAction::Sandbox { output_format })),
@@ -1192,6 +1207,14 @@ fn parse_direct_slash_cli_action(
             },
             output_format,
         }),
+        Ok(Some(SlashCommand::Context { action })) => {
+            validate_context_action(action.as_deref())?;
+            Ok(CliAction::Context {
+                model,
+                model_flag_raw: None,
+                output_format,
+            })
+        }
         Ok(Some(SlashCommand::Skills { args })) => {
             match classify_skills_slash_command(args.as_deref()) {
                 SkillSlashDispatch::Invoke(prompt) => Ok(CliAction::Prompt {
@@ -1305,6 +1328,7 @@ fn suggest_similar_subcommand(input: &str) -> Option<Vec<String>> {
         "help",
         "version",
         "status",
+        "context",
         "sandbox",
         "doctor",
         "state",
@@ -2778,6 +2802,24 @@ struct StatusUsage {
     estimated_tokens: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContextCategory {
+    name: &'static str,
+    tokens: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ContextSnapshot {
+    model: String,
+    max_context: Option<u32>,
+    auto_compact_threshold: Option<u32>,
+    estimated_used_tokens: usize,
+    categories: Vec<ContextCategory>,
+    context: StatusContext,
+    model_provenance: Option<ModelProvenance>,
+    max_context_source: &'static str,
+}
+
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct GitWorkspaceSummary {
@@ -3187,6 +3229,41 @@ fn run_resume_command(
                 )),
             })
         }
+        SlashCommand::Context { action } => {
+            validate_context_action(action.as_deref())
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            let model = session.model.as_deref().unwrap_or("restored-session");
+            let max_context = configured_max_context_for_model(model);
+            let auto_compact_threshold =
+                max_context.map(runtime::auto_compaction_threshold_from_max_context);
+            let message_tokens = runtime::estimate_session_tokens(session);
+            let context = status_context(Some(session_path))?;
+            let snapshot = ContextSnapshot {
+                model: model.to_string(),
+                max_context,
+                auto_compact_threshold,
+                estimated_used_tokens: message_tokens,
+                categories: build_context_categories(
+                    message_tokens,
+                    0,
+                    context.memory_file_count,
+                    max_context,
+                    auto_compact_threshold,
+                ),
+                context,
+                model_provenance: None,
+                max_context_source: if max_context.is_some() {
+                    "settings.models[].maxContext"
+                } else {
+                    "unknown"
+                },
+            };
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(format_context_report(&snapshot)),
+                json: Some(context_json_value(&snapshot)),
+            })
+        }
         SlashCommand::Sandbox => {
             let cwd = env::current_dir()?;
             let loader = ConfigLoader::default_for(&cwd);
@@ -3413,7 +3490,6 @@ fn run_resume_command(
         | SlashCommand::Rename { .. }
         | SlashCommand::Copy { .. }
         | SlashCommand::Hooks { .. }
-        | SlashCommand::Context { .. }
         | SlashCommand::Color { .. }
         | SlashCommand::Effort { .. }
         | SlashCommand::Branch { .. }
@@ -4384,6 +4460,10 @@ impl LiveCli {
                 self.print_status();
                 false
             }
+            SlashCommand::Context { action } => {
+                self.print_context(action.as_deref())?;
+                false
+            }
             SlashCommand::Bughunter { scope } => {
                 self.run_bughunter(scope.as_deref())?;
                 false
@@ -4523,7 +4603,6 @@ impl LiveCli {
             | SlashCommand::Rename { .. }
             | SlashCommand::Copy { .. }
             | SlashCommand::Hooks { .. }
-            | SlashCommand::Context { .. }
             | SlashCommand::Color { .. }
             | SlashCommand::Effort { .. }
             | SlashCommand::Branch { .. }
@@ -4567,6 +4646,13 @@ impl LiveCli {
                 None, // #148: REPL /status doesn't carry flag provenance
             )
         );
+    }
+
+    fn print_context(&self, action: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        validate_context_action(action)?;
+        let snapshot = context_snapshot_for_live(self)?;
+        println!("{}", format_context_report(&snapshot));
+        Ok(())
     }
 
     fn record_prompt_history(&mut self, prompt: &str) {
@@ -5447,6 +5533,259 @@ fn print_status_snapshot(
     Ok(())
 }
 
+fn print_context_snapshot(
+    model: &str,
+    model_flag_raw: Option<&str>,
+    output_format: CliOutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provenance = match model_flag_raw {
+        Some(raw) => ModelProvenance::from_flag(raw),
+        None => ModelProvenance::from_env_or_config_or_default(model),
+    };
+    let context = status_context(None)?;
+    let max_context = configured_max_context_for_model(&provenance.resolved);
+    let auto_compact_threshold =
+        max_context.map(runtime::auto_compaction_threshold_from_max_context);
+    let snapshot = ContextSnapshot {
+        model: provenance.resolved.clone(),
+        max_context,
+        auto_compact_threshold,
+        estimated_used_tokens: 0,
+        categories: build_context_categories(
+            0,
+            0,
+            context.memory_file_count,
+            max_context,
+            auto_compact_threshold,
+        ),
+        context,
+        model_provenance: Some(provenance),
+        max_context_source: if max_context.is_some() {
+            "settings.models[].maxContext"
+        } else {
+            "unknown"
+        },
+    };
+    match output_format {
+        CliOutputFormat::Text => println!("{}", format_context_report(&snapshot)),
+        CliOutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&context_json_value(&snapshot))?
+        ),
+    }
+    Ok(())
+}
+
+fn configured_max_context_for_model(model: &str) -> Option<u32> {
+    let cwd = env::current_dir().ok()?;
+    let loader = ConfigLoader::default_for(&cwd);
+    loader.load().ok()?.feature_config().max_context_for_model(model)
+}
+
+fn estimate_text_tokens(text: &str) -> usize {
+    text.len() / 4 + usize::from(!text.is_empty())
+}
+
+fn build_context_categories(
+    message_tokens: usize,
+    system_prompt_tokens: usize,
+    memory_file_count: usize,
+    max_context: Option<u32>,
+    auto_compact_threshold: Option<u32>,
+) -> Vec<ContextCategory> {
+    let buffer_tokens = match (max_context, auto_compact_threshold) {
+        (Some(max_context), Some(threshold)) => max_context.saturating_sub(threshold) as usize,
+        _ => 0,
+    };
+    let reserved_used = message_tokens.saturating_add(system_prompt_tokens);
+    let free_tokens = max_context
+        .map(|max| {
+            (max as usize)
+                .saturating_sub(reserved_used)
+                .saturating_sub(buffer_tokens)
+        })
+        .unwrap_or(0);
+    vec![
+        ContextCategory {
+            name: "Messages",
+            tokens: message_tokens,
+        },
+        ContextCategory {
+            name: "System prompt",
+            tokens: system_prompt_tokens,
+        },
+        ContextCategory {
+            name: "Memory files",
+            tokens: memory_file_count,
+        },
+        ContextCategory {
+            name: "Autocompact buffer",
+            tokens: buffer_tokens,
+        },
+        ContextCategory {
+            name: "Free space",
+            tokens: free_tokens,
+        },
+    ]
+}
+
+fn context_snapshot_for_live(
+    cli: &LiveCli,
+) -> Result<ContextSnapshot, Box<dyn std::error::Error>> {
+    let context = status_context(Some(&cli.session.path))?;
+    let max_context = configured_max_context_for_model(&cli.model);
+    let auto_compact_threshold = Some(cli.runtime.auto_compaction_input_tokens_threshold());
+    let message_tokens = cli.runtime.estimated_tokens();
+    let system_prompt_tokens = cli
+        .system_prompt
+        .iter()
+        .map(|section| estimate_text_tokens(section))
+        .sum();
+    Ok(ContextSnapshot {
+        model: cli.model.clone(),
+        max_context,
+        auto_compact_threshold,
+        estimated_used_tokens: message_tokens.saturating_add(system_prompt_tokens),
+        categories: build_context_categories(
+            message_tokens,
+            system_prompt_tokens,
+            context.memory_file_count,
+            max_context,
+            auto_compact_threshold,
+        ),
+        context,
+        model_provenance: None,
+        max_context_source: if max_context.is_some() {
+            "settings.models[].maxContext"
+        } else {
+            "runtime default"
+        },
+    })
+}
+
+fn context_percent(tokens: usize, max_context: Option<u32>) -> Option<f64> {
+    let max_context = max_context?;
+    if max_context == 0 {
+        return None;
+    }
+    Some(tokens as f64 * 100.0 / f64::from(max_context))
+}
+
+fn format_context_percent(tokens: usize, max_context: Option<u32>) -> String {
+    context_percent(tokens, max_context).map_or_else(
+        || "n/a".to_string(),
+        |percent| format!("{percent:.1}%"),
+    )
+}
+
+fn format_context_report(snapshot: &ContextSnapshot) -> String {
+    let max_context = snapshot
+        .max_context
+        .map_or_else(|| "unknown".to_string(), |tokens| tokens.to_string());
+    let threshold = snapshot
+        .auto_compact_threshold
+        .map_or_else(|| "unknown".to_string(), |tokens| tokens.to_string());
+    let free_tokens = snapshot
+        .categories
+        .iter()
+        .find(|category| category.name == "Free space")
+        .map_or(0, |category| category.tokens);
+    let source_line = snapshot
+        .model_provenance
+        .as_ref()
+        .map(|provenance| format!("\n  Model source     {}", provenance.source.as_str()))
+        .unwrap_or_default();
+    let mut lines = vec![format!(
+        "Context
+  Model            {}{source_line}
+  Context window   {max_context}
+  Max source       {}
+  Estimated used   {} ({})
+  Auto-compact     {threshold}
+  Free             {} ({})",
+        snapshot.model,
+        snapshot.max_context_source,
+        snapshot.estimated_used_tokens,
+        format_context_percent(snapshot.estimated_used_tokens, snapshot.max_context),
+        free_tokens,
+        format_context_percent(free_tokens, snapshot.max_context),
+    )];
+    lines.push("Breakdown".to_string());
+    for category in &snapshot.categories {
+        lines.push(format!(
+            "  {:<17} {:>8} {:>7}",
+            category.name,
+            category.tokens,
+            format_context_percent(category.tokens, snapshot.max_context),
+        ));
+    }
+    lines.push(format!(
+        "Workspace
+  Session          {}
+  Memory files     {}
+  Config files     loaded {}/{}",
+        snapshot.context.session_path.as_ref().map_or_else(
+            || "live-repl".to_string(),
+            |path| path.display().to_string(),
+        ),
+        snapshot.context.memory_file_count,
+        snapshot.context.loaded_config_files,
+        snapshot.context.discovered_config_files,
+    ));
+    lines.join("\n\n")
+}
+
+fn context_json_value(snapshot: &ContextSnapshot) -> serde_json::Value {
+    let free_tokens = snapshot
+        .categories
+        .iter()
+        .find(|category| category.name == "Free space")
+        .map_or(0, |category| category.tokens);
+    json!({
+        "kind": "context",
+        "status": if snapshot.context.config_load_error.is_some() { "degraded" } else { "ok" },
+        "config_load_error": snapshot.context.config_load_error,
+        "model": snapshot.model,
+        "model_source": snapshot.model_provenance.as_ref().map(|p| p.source.as_str()),
+        "model_raw": snapshot.model_provenance.as_ref().and_then(|p| p.raw.clone()),
+        "context_window": {
+            "max_context": snapshot.max_context,
+            "max_context_source": snapshot.max_context_source,
+            "estimated_used_tokens": snapshot.estimated_used_tokens,
+            "estimated_used_percent": context_percent(
+                snapshot.estimated_used_tokens,
+                snapshot.max_context
+            ),
+            "auto_compact_threshold": snapshot.auto_compact_threshold,
+            "autocompact_buffer_tokens": snapshot
+                .max_context
+                .zip(snapshot.auto_compact_threshold)
+                .map(|(max, threshold)| max.saturating_sub(threshold)),
+            "free_tokens": free_tokens,
+            "free_percent": context_percent(free_tokens, snapshot.max_context),
+        },
+        "categories": snapshot
+            .categories
+            .iter()
+            .map(|category| json!({
+                "name": category.name,
+                "tokens": category.tokens,
+                "percent": context_percent(category.tokens, snapshot.max_context),
+            }))
+            .collect::<Vec<_>>(),
+        "workspace": {
+            "cwd": snapshot.context.cwd,
+            "session": snapshot.context.session_path.as_ref().map_or_else(
+                || "live-repl".to_string(),
+                |path| path.display().to_string()
+            ),
+            "loaded_config_files": snapshot.context.loaded_config_files,
+            "discovered_config_files": snapshot.context.discovered_config_files,
+            "memory_file_count": snapshot.context.memory_file_count,
+        }
+    })
+}
+
 fn status_json_value(
     model: Option<&str>,
     usage: StatusUsage,
@@ -5726,6 +6065,16 @@ fn format_commit_skipped_report() -> String {
   Action           create a git commit from the current workspace changes
   Next             /status to inspect context · /diff to inspect repo changes"
         .to_string()
+}
+
+fn validate_context_action(action: Option<&str>) -> Result<(), String> {
+    match action.map(str::trim).filter(|value| !value.is_empty()) {
+        None | Some("show" | "status" | "usage") => Ok(()),
+        Some("clear") => Err("`/context clear` is not supported; use `/clear` to reset the session or `/compact` to reduce context".to_string()),
+        Some(other) => Err(format!(
+            "unsupported /context action `{other}`. Use `/context`, `/context show`, or `/context usage`."
+        )),
+    }
 }
 
 fn print_sandbox_status_snapshot(
@@ -9024,29 +9373,31 @@ fn print_help(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::
 mod tests {
     use super::{
         build_runtime_plugin_state_with_loader, build_runtime_with_plugin_state,
-        classify_error_kind, collect_session_prompt_history, create_managed_session_handle,
+        build_context_categories, classify_error_kind, collect_session_prompt_history,
+        configured_max_context_for_model, context_json_value, create_managed_session_handle,
         describe_tool_progress, filter_tool_specs, format_bughunter_report,
         format_commit_preflight_report, format_commit_skipped_report, format_compact_report,
-        format_connected_line, format_cost_report, format_history_timestamp,
+        format_connected_line, format_context_report, format_cost_report, format_history_timestamp,
         format_internal_prompt_progress_line, format_issue_report, format_model_report,
         format_model_switch_report, format_permissions_report, format_permissions_switch_report,
         format_pr_report, format_resume_report, format_status_report, format_tool_call_start,
         format_tool_result, format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, format_user_visible_api_error,
         merge_prompt_with_stdin, normalize_permission_mode, parse_args, parse_export_args,
-        parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
-        parse_history_count, permission_policy, print_help_to, push_output_block,
-        render_config_report, render_diff_report, render_diff_report_for, render_help_topic,
-        render_memory_report, render_prompt_history_report, render_repl_help, render_resume_usage,
+        parse_git_status_branch,
+        parse_git_status_metadata_for, parse_git_workspace_summary, parse_history_count,
+        permission_policy, print_help_to, push_output_block, render_config_report,
+        render_diff_report, render_diff_report_for, render_help_topic, render_memory_report,
+        render_prompt_history_report, render_repl_help, render_resume_usage,
         render_session_markdown, resolve_model_alias, resolve_model_alias_with_config,
         resolve_repl_model, resolve_session_reference, response_to_events,
         resume_supported_slash_commands, run_resume_command, short_tool_id,
         slash_command_completion_candidates_with_sessions, split_error_hint, status_context,
         summarize_tool_payload_for_markdown, try_resolve_bare_skill_prompt, validate_no_args,
-        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor, GitWorkspaceSummary,
-        InternalPromptProgressEvent, InternalPromptProgressState, LiveCli, LocalHelpTopic,
-        PromptHistoryEntry, SlashCommand, StatusUsage, DEFAULT_MODEL, LATEST_SESSION_REFERENCE,
-        STUB_COMMANDS,
+        write_mcp_server_fixture, CliAction, CliOutputFormat, CliToolExecutor,
+        ContextSnapshot, GitWorkspaceSummary, InternalPromptProgressEvent,
+        InternalPromptProgressState, LiveCli, LocalHelpTopic, PromptHistoryEntry, SlashCommand,
+        StatusUsage, DEFAULT_MODEL, LATEST_SESSION_REFERENCE, STUB_COMMANDS,
     };
     use api::{ApiError, MessageResponse, OutputContentBlock, Usage};
     use plugins::{
@@ -9841,6 +10192,42 @@ mod tests {
                 output_format: CliOutputFormat::Text,
             }
         );
+    }
+
+    #[test]
+    fn parses_context_as_local_diagnostic_command() {
+        assert_eq!(
+            parse_args(&["context".to_string()]).expect("context should parse"),
+            CliAction::Context {
+                model: DEFAULT_MODEL.to_string(),
+                model_flag_raw: None,
+                output_format: CliOutputFormat::Text,
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "--output-format".to_string(),
+                "json".to_string(),
+                "/context".to_string(),
+                "usage".to_string(),
+            ])
+            .expect("/context usage should parse"),
+            CliAction::Context {
+                model: DEFAULT_MODEL.to_string(),
+                model_flag_raw: None,
+                output_format: CliOutputFormat::Json,
+            }
+        );
+    }
+
+    #[test]
+    fn context_clear_action_is_rejected_as_session_mutation() {
+        let error = parse_args(&["/context".to_string(), "clear".to_string()])
+            .expect_err("/context clear should be rejected");
+
+        assert!(error.contains("/context clear"), "{error}");
+        assert!(error.contains("/clear"), "{error}");
+        assert!(error.contains("/compact"), "{error}");
     }
 
     #[test]
@@ -11995,6 +12382,68 @@ UU conflicted.rs",
         assert!(context.cwd.is_absolute());
         assert!(context.discovered_config_files >= context.loaded_config_files);
         assert!(context.loaded_config_files <= context.discovered_config_files);
+    }
+
+    #[test]
+    fn context_json_uses_settings_max_context_for_autocompact_buffer() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("workspace");
+        let config_home = root.join("home").join(".claw");
+        fs::create_dir_all(&cwd).expect("workspace dir");
+        fs::create_dir_all(&config_home).expect("config home dir");
+        fs::write(
+            config_home.join("settings.json"),
+            r#"{
+              "model": "qwen3.6-35b-a3b:tr",
+              "providers": {
+                "local-lmstudio": {
+                  "type": "openai",
+                  "url": "http://192.168.0.6:12345/v1"
+                }
+              },
+              "models": [
+                {
+                  "name": "qwen3.6-35b-a3b:tr",
+                  "provider": "local-lmstudio",
+                  "maxContext": 262000
+                }
+              ]
+            }"#,
+        )
+        .expect("write settings");
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+
+        let (json, text) = with_current_dir(&cwd, || {
+            let max_context = configured_max_context_for_model("qwen3.6-35b-a3b:tr");
+            let threshold = max_context.map(runtime::auto_compaction_threshold_from_max_context);
+            let context = status_context(None).expect("status context should load");
+            let snapshot = ContextSnapshot {
+                model: "qwen3.6-35b-a3b:tr".to_string(),
+                max_context,
+                auto_compact_threshold: threshold,
+                estimated_used_tokens: 1_500,
+                categories: build_context_categories(1_200, 300, 0, max_context, threshold),
+                context,
+                model_provenance: None,
+                max_context_source: "settings.models[].maxContext",
+            };
+            (context_json_value(&snapshot), format_context_report(&snapshot))
+        });
+
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+
+        assert_eq!(json["context_window"]["max_context"], 262000);
+        assert_eq!(json["context_window"]["auto_compact_threshold"], 218770);
+        assert_eq!(json["context_window"]["autocompact_buffer_tokens"], 43230);
+        assert_eq!(json["context_window"]["free_tokens"], 217270);
+        assert!(text.contains("Autocompact buffer"), "{text}");
+        assert!(text.contains("settings.models[].maxContext"), "{text}");
     }
 
     #[test]

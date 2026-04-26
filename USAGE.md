@@ -241,6 +241,8 @@ When `--model` is omitted, both interactive `claw` and non-interactive prompt mo
 
 Automatic compaction uses `models[].maxContext`. The trigger is calculated at roughly 83.5% of the context window, leaving a 16.5% buffer for system tools, MCP tools, deferred tool definitions, and the next turn. For a 200k context model this triggers near 167k input tokens and keeps about 33k tokens as buffer.
 
+`/context` is a local diagnostic command. It does not call the model. It reads the active session token estimate, the selected model's `models[].maxContext`, and the derived auto-compact threshold, then renders a context-window breakdown with messages, system prompt, memory file count, autocompact buffer, and free space. `claw context`, `claw /context`, and `claw --resume SESSION.jsonl /context` expose the same report; `--output-format json` returns the machine-readable shape.
+
 ## FAQ
 
 ### What about Codex?
